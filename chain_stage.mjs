@@ -464,10 +464,15 @@ function named(item, snake, camel) {
   return "";
 }
 
+function wholeCount(value) {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return value;
+}
+
 function statedMilligrams(item) {
   const value = item?.milligrams;
   if (typeof value === "string" && value.trim() === "") return null;
-  return value == null ? null : value;
+  return value == null ? null : wholeCount(value);
 }
 
 function statedName(value) {
@@ -508,7 +513,7 @@ export function purchaseReceiptCommands(poNumber, receipts) {
     }
     const lotId = named(item, "lot_id", "lotId") || `${poId}:${index}:${ingredientId || componentId}`;
     if (componentId) {
-      const pieces = item.pieces;
+      const pieces = wholeCount(item.pieces);
       if (typeof pieces !== "number" || !Number.isInteger(pieces) || pieces < 1) {
         throw new Error("pieces must be a positive integer");
       }

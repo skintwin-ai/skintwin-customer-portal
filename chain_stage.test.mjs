@@ -1958,3 +1958,112 @@ test("a receipt named by a blank milligrams records the kilograms once", () => {
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a receipt named by a numeric string records that count once", () => {
+  const preferred = purchaseReceiptCommands("PO-17", [
+    {
+      ingredientId: "glycerin",
+      qualificationId: "qual-glycerin",
+      lotId: "lot-text",
+      milligrams: " 5000 ",
+      quantityKg: 0.02,
+    },
+  ]);
+  assert.equal(preferred[0].args.milligrams, 5000);
+  const pieces = purchaseReceiptCommands("PO-17", [
+    {
+      componentId: "tube-cleanser",
+      supplierName: "Joburg Tubes",
+      lotId: "pack-text",
+      pieces: " 4 ",
+    },
+  ]);
+  assert.equal(pieces[0].args.pieces, 4);
+  assert.throws(
+    () =>
+      purchaseReceiptCommands("PO-17", [
+        {
+          ingredientId: "glycerin",
+          qualificationId: "qual-glycerin",
+          lotId: "lot-word",
+          milligrams: "lots",
+          quantityKg: 0.02,
+        },
+      ]),
+    /milligrams must be a positive integer/,
+  );
+  assert.throws(
+    () =>
+      purchaseReceiptCommands("PO-17", [
+        {
+          componentId: "tube-cleanser",
+          supplierName: "Joburg Tubes",
+          lotId: "pack-word",
+          pieces: "four",
+        },
+      ]),
+    /pieces must be a positive integer/,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-count-text-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const lines = [
+    {
+      ingredientId: "glycerin",
+      qualificationId: "qual-glycerin",
+      lotId: "lot-text",
+      milligrams: "5000",
+    },
+    {
+      componentId: "tube-cleanser",
+      supplierName: "Joburg Tubes",
+      lotId: "pack-text",
+      pieces: "4",
+    },
+  ];
+  try {
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const received = acceptPurchaseReceipt("PO-17", lines);
+    assert.equal(received.ok, true);
+    assert.equal(received.count, 2);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /lot-text/);
+    assert.match(recorded, /"milligrams": 5000/);
+    assert.match(recorded, /"pieces": 4/);
+    const rejected = acceptPurchaseReceipt("PO-17", [
+      {
+        ingredientId: "glycerin",
+        qualificationId: "qual-glycerin",
+        lotId: "lot-word",
+        milligrams: "lots",
+      },
+    ]);
+    assert.equal(rejected.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const again = acceptPurchaseReceipt("PO-17", lines);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

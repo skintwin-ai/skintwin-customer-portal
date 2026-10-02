@@ -236,7 +236,8 @@ export function fulfillmentCommands(orderNumber, items, therapistId) {
     if (type !== "product" && type !== "treatment") {
       throw new Error(`unknown item type ${type}`);
     }
-    if (typeof item.location !== "string" || !Number.isInteger(item.milligrams)) {
+    const milligrams = wholeCount(item.milligrams);
+    if (typeof item.location !== "string" || !Number.isInteger(milligrams)) {
       throw new Error(`sku ${sku} requires location and milligrams`);
     }
     const kind = type === "treatment" ? "treatment" : "retail";
@@ -245,7 +246,7 @@ export function fulfillmentCommands(orderNumber, items, therapistId) {
       fulfillment_id: `${orderId}:${index}:${sku}`,
       sku_id: sku,
       location: item.location,
-      milligrams: item.milligrams,
+      milligrams,
       kind,
       practitioner_id: kind === "treatment" ? practitioner : null,
     };

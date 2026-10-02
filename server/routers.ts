@@ -736,6 +736,16 @@ const paymentRouter = router({
         if (!recorded.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
         }
+      } else if (transaction.status === "success" && payment) {
+        const order = payment.orderId ? await db.getOrderById(payment.orderId) : undefined;
+        const recorded = recordOrderSaleSettlements(
+          order?.orderNumber,
+          order ? await db.getOrderItems(order.id) : [],
+          paymentForSettlement({ id: payment.id }, payment),
+        );
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
       }
       if (payment) {
         await db.updatePayment(payment.id, {

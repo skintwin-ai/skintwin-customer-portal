@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import type Stripe from "stripe";
 import * as db from "./db";
 import { constructWebhookEvent } from "./integrations/stripe";
-import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn, acceptChargeStoredReturns } from "./supplyChain";
+import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn, acceptChargeStoredReturns, paymentForSettlement, recordOrderSaleSettlements } from "./supplyChain";
 
 export function createStripeWebhookRouter(): Router {
   const router = Router();
@@ -59,6 +59,17 @@ async function handlePaymentIntentSucceeded(paymentIntent: Stripe.PaymentIntent)
   }
 
   const payment = await db.getPaymentByProcessorId(paymentIntent.id);
+  if (settled.recorded === false && payment) {
+    const order = payment.orderId ? await db.getOrderById(payment.orderId) : undefined;
+    const stored = recordOrderSaleSettlements(
+      order?.orderNumber,
+      order ? await db.getOrderItems(order.id) : [],
+      paymentForSettlement({ id: payment.id }, payment),
+    );
+    if (!stored.ok) {
+      throw new Error(stored.error);
+    }
+  }
   if (!payment) return;
   const chargeId = typeof paymentIntent.latest_charge === "string" ? paymentIntent.latest_charge : undefined;
   await db.updatePayment(payment.id, {

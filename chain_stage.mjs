@@ -464,6 +464,16 @@ function named(item, snake, camel) {
   return "";
 }
 
+function statedMilligrams(item) {
+  const value = item?.milligrams;
+  if (typeof value === "string" && value.trim() === "") return null;
+  return value == null ? null : value;
+}
+
+function statedName(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function namedKilograms(item) {
   for (const key of ["quantity_kg", "quantityKg"]) {
     const value = item?.[key];
@@ -506,7 +516,7 @@ export function purchaseReceiptCommands(poNumber, receipts) {
         command: "receive_package",
         args: {
           component_id: componentId,
-          name: text(item.name || componentId, "package name"),
+          name: text(statedName(item.name) || componentId, "package name"),
           lot_id: text(lotId, "lot_id"),
           supplier_name: text(named(item, "supplier_name", "supplierName"), "supplier_name"),
           pieces,
@@ -514,7 +524,7 @@ export function purchaseReceiptCommands(poNumber, receipts) {
       });
       return;
     }
-    let milligrams = item.milligrams;
+    let milligrams = statedMilligrams(item);
     if (milligrams == null) {
       const kilograms = namedKilograms(item);
       if (kilograms == null) throw new Error("milligrams must be a positive integer");

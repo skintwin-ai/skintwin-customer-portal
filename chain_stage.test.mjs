@@ -1840,3 +1840,121 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a receipt named by a blank milligrams records the kilograms once", () => {
+  const preferred = purchaseReceiptCommands("PO-16", [
+    {
+      ingredientId: "glycerin",
+      qualificationId: "qual-glycerin",
+      lotId: "lot-mg",
+      milligrams: 5000,
+      quantityKg: 0.02,
+    },
+  ]);
+  assert.equal(preferred[0].args.milligrams, 5000);
+  assert.equal(preferred[0].args.ingredient_id, "glycerin");
+  const fallen = purchaseReceiptCommands("PO-16", [
+    {
+      ingredientId: "glycerin",
+      qualificationId: "qual-glycerin",
+      lotId: "lot-kg",
+      milligrams: "  ",
+      quantity_kg: "  ",
+      quantityKg: 0.02,
+    },
+  ]);
+  assert.equal(fallen[0].args.milligrams, 20000);
+  assert.equal(fallen[0].args.lot_id, "lot-kg");
+  assert.throws(
+    () =>
+      purchaseReceiptCommands("PO-16", [
+        {
+          ingredientId: "glycerin",
+          qualificationId: "qual-glycerin",
+          lotId: "lot-none",
+          milligrams: "  ",
+          quantity_kg: "  ",
+          quantityKg: "  ",
+        },
+      ]),
+    /milligrams must be a positive integer/,
+  );
+  const named = purchaseReceiptCommands("PO-16", [
+    {
+      componentId: "tube-cleanser",
+      name: "Cleanser tube",
+      supplierName: "Joburg Tubes",
+      lotId: "pack-name",
+      pieces: 4,
+    },
+  ]);
+  assert.equal(named[0].args.name, "Cleanser tube");
+  const blankName = purchaseReceiptCommands("PO-16", [
+    {
+      componentId: "tube-cleanser",
+      name: "  ",
+      supplierName: "Joburg Tubes",
+      lotId: "pack-blank",
+      pieces: 4,
+    },
+  ]);
+  assert.equal(blankName[0].args.name, "tube-cleanser");
+  assert.equal(blankName[0].args.component_id, "tube-cleanser");
+  assert.equal(purchaseReceiptCommands("PO-16", [{ name: "Retail serum", milligrams: "  " }]).length, 0);
+  const dir = mkdtempSync(join(tmpdir(), "portal-blank-mg-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const lines = [
+    { name: "Retail serum", milligrams: "  " },
+    {
+      ingredientId: "glycerin",
+      qualificationId: "qual-glycerin",
+      lotId: "lot-kg",
+      milligrams: "  ",
+      quantityKg: 0.02,
+    },
+    {
+      componentId: "tube-cleanser",
+      name: "  ",
+      supplierName: "Joburg Tubes",
+      lotId: "pack-blank",
+      pieces: 4,
+    },
+  ];
+  try {
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const received = acceptPurchaseReceipt("PO-16", lines);
+    assert.equal(received.ok, true);
+    assert.equal(received.count, 2);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /lot-kg/);
+    assert.match(recorded, /pack-blank/);
+    assert.match(recorded, /tube-cleanser/);
+    assert.equal(recorded.includes("Retail serum"), false);
+    const again = acceptPurchaseReceipt("PO-16", lines);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

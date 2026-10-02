@@ -5,6 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
+import { acceptOrderFulfillments, acceptSupplyChainCommand, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -291,6 +292,10 @@ const consultationRouter = router({
       duration: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const recorded = recordSkinOutcome(input.skinAnalysis);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       const id = await db.createConsultation({
         ...input,
         therapistId: ctx.therapist.id,
@@ -307,6 +312,10 @@ const consultationRouter = router({
       status: z.enum(['scheduled', 'in_progress', 'completed', 'cancelled', 'no_show']).optional(),
     }))
     .mutation(async ({ input }) => {
+      const recorded = recordSkinOutcome(input.skinAnalysis);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       const { id, ...data } = input;
       await db.updateConsultation(id, data);
       return { success: true };
@@ -375,6 +384,7 @@ const productRouter = router({
       name: z.string(),
       description: z.string().optional(),
       sku: z.string().optional(),
+      formulaId: z.string().optional(),
       price: z.string(),
       costPrice: z.string().optional(),
       category: z.string().optional(),
@@ -382,7 +392,21 @@ const productRouter = router({
       inventory: z.number().default(0),
     }))
     .mutation(async ({ input }) => {
-      const id = await db.createProduct(input);
+      if (input.formulaId) {
+        const accepted = acceptSupplyChainCommand({
+          command: "catalog_sku",
+          args: {
+            sku_id: input.sku || input.name,
+            formula_id: input.formulaId,
+            name: input.name,
+          },
+        });
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+      }
+      const { formulaId: _formulaId, ...product } = input;
+      const id = await db.createProduct(product);
       return { id };
     }),
   
@@ -475,16 +499,26 @@ const orderRouter = router({
         unitPrice: z.string(),
         total: z.string(),
         type: z.enum(['product', 'treatment', 'service']).default('product'),
+        location: z.string().optional(),
+        milligrams: z.number().int().positive().optional(),
+        practitionerId: z.string().optional(),
       })),
     }))
     .mutation(async ({ input }) => {
       const { items, ...orderData } = input;
+      const drawn = acceptOrderFulfillments(input.orderNumber, items, input.therapistId);
+      if (!drawn.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+      }
       const orderId = await db.createOrder(orderData);
       
-      const orderItems = items.map(item => ({
-        orderId,
-        ...item,
-      }));
+      const orderItems = items.map(item => {
+        const { location: _location, milligrams: _milligrams, practitionerId: _practitionerId, ...stored } = item;
+        return {
+          orderId,
+          ...stored,
+        };
+      });
       await db.createOrderItems(orderItems);
       
       return { id: orderId };
@@ -1014,6 +1048,20 @@ export const appRouter = router({
   notification: notificationRouter,
   report: reportRouter,
   audit: auditRouter,
+  supplyChain: router({
+    command: publicProcedure
+      .input(z.object({
+        command: z.string(),
+        args: z.record(z.any()).optional(),
+      }))
+      .mutation(({ input }) => {
+        const accepted = acceptSupplyChainCommand(input);
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+        return accepted.artifact;
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

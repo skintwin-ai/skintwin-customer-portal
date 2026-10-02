@@ -614,7 +614,7 @@ export function bookingDeliveryCommands(bookingId, delivery) {
         batch_id: text(namedField(delivery, "batchId", "batch_id"), "batch_id"),
         source,
         destination,
-        milligrams: positive(delivery.milligrams, "milligrams"),
+        milligrams: positive(wholeCount(delivery.milligrams), "milligrams"),
       },
     },
   ];

@@ -2125,3 +2125,70 @@ test("an order named by a numeric string draws that sale once", () => {
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a booking named by a numeric string moves that batch once", () => {
+  const moved = bookingDeliveryCommands("12", {
+    sku: "sku-cleanser",
+    batchId: "batch-cleanser",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: " 2000 ",
+  });
+  assert.equal(moved[0].args.milligrams, 2000);
+  assert.equal(acceptBookingDelivery("12", null).count, 0);
+  const dir = mkdtempSync(join(tmpdir(), "portal-booking-count-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const delivery = {
+    sku: "sku-cleanser",
+    batchId: "batch-cleanser",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: "2000",
+  };
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const seededText = readFileSync(ledger, "utf8");
+    const absent = acceptBookingDelivery("12", null);
+    assert.equal(absent.ok, true);
+    assert.equal(absent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), seededText);
+    const word = acceptBookingDelivery("12", { ...delivery, milligrams: "lots" });
+    assert.equal(word.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), seededText);
+    const sent = acceptBookingDelivery("12", delivery);
+    assert.equal(sent.ok, true, sent.error);
+    assert.equal(sent.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /booking:12/);
+    assert.match(recorded, /"milligrams": 2000/);
+    const overdraw = acceptBookingDelivery("12", { ...delivery, milligrams: "4000" });
+    assert.equal(overdraw.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

@@ -383,6 +383,113 @@ test("a paid invoice settles each line that names a fulfillment", () => {
   }
 });
 
+test("a paid invoice settles the sale named on the line price", () => {
+  const gift = {
+    id: "in_price",
+    currency: "zar",
+    lines: { data: [{ amount: 18500, price: { id: "price_gift", metadata: { gift: "thanks" } } }] },
+  };
+  assert.deepEqual(paidInvoiceLineSettlements(gift), []);
+  const unexpanded = {
+    id: "in_price",
+    currency: "zar",
+    lines: { data: [{ amount: 18500, price: "price_123" }] },
+  };
+  assert.deepEqual(paidInvoiceLineSettlements(unexpanded), []);
+  const owned = paidInvoiceLineSettlements({
+    id: "in_price",
+    currency: "zar",
+    lines: {
+      data: [
+        {
+          amount: 18500,
+          metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+          price: { metadata: { fulfillment_id: "order-9:1:sku-cleanser" } },
+        },
+      ],
+    },
+  });
+  assert.equal(owned[0].fulfillmentId, "order-9:0:sku-cleanser");
+  const priced = paidInvoiceLineSettlements({
+    id: "in_price",
+    currency: "usd",
+    lines: {
+      data: [
+        { amount: 10000, price: { metadata: { fulfillmentId: " order-9:0:sku-cleanser " } } },
+        { amount: 2000, plan: { metadata: { fulfillment_id: "order-9:0:sku-cleanser" } } },
+        { amount: 8000, price: "price_plain", plan: { metadata: { fulfillment_id: "order-9:1:sku-cleanser" } } },
+      ],
+    },
+  });
+  assert.deepEqual(
+    priced.map((payment) => [payment.fulfillmentId, payment.amountCents, payment.currency]),
+    [
+      ["order-9:0:sku-cleanser", 12000, "USD"],
+      ["order-9:1:sku-cleanser", 8000, "USD"],
+    ],
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-invoice-price-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const skipped = recordInvoiceSettlement(gift);
+    assert.equal(skipped.ok, true);
+    assert.equal(skipped.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const missing = recordInvoiceSettlement({
+      id: "in_missing",
+      currency: "zar",
+      lines: { data: [{ amount: 1000, price: { metadata: { fulfillment_id: "missing-order" } } }] },
+    });
+    assert.equal(missing.ok, false);
+    assert.equal(readFileSync(ledger, "utf8").includes("pay-in_missing"), false);
+    const paid = recordInvoiceSettlement({
+      id: "in_price",
+      currency: "zar",
+      lines: { data: [{ amount: 18500, price: { metadata: { fulfillment_id: "order-9:0:sku-cleanser" } } }] },
+    });
+    assert.equal(paid.ok, true);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /pay-in_price/);
+    const again = recordInvoiceSettlement({
+      id: "in_price",
+      currency: "zar",
+      lines: { data: [{ amount: 18500, price: { metadata: { fulfillment_id: "order-9:0:sku-cleanser" } } }] },
+    });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a verified Paystack charge settles the fulfillment named in its metadata", () => {
   const metadata = paystackInitializeMetadata({
     userId: 4,

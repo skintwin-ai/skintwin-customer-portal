@@ -137,6 +137,11 @@ function invoiceLines(invoice) {
   return [];
 }
 
+function objectMetadataId(record, key) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return "";
+  return named(metadataObject(record.metadata)[key]);
+}
+
 function lineFulfillmentId(line) {
   if (!line || typeof line !== "object") return "";
   const metadata = metadataObject(line.metadata);
@@ -144,7 +149,11 @@ function lineFulfillmentId(line) {
     named(line.fulfillment_id) ||
     named(line.fulfillmentId) ||
     named(metadata.fulfillment_id) ||
-    named(metadata.fulfillmentId)
+    named(metadata.fulfillmentId) ||
+    objectMetadataId(line.price, "fulfillment_id") ||
+    objectMetadataId(line.price, "fulfillmentId") ||
+    objectMetadataId(line.plan, "fulfillment_id") ||
+    objectMetadataId(line.plan, "fulfillmentId")
   );
 }
 

@@ -214,6 +214,49 @@ test("a shopify catalog batch leaves nothing when a formula is unknown", () => {
   }
 });
 
+test("a repeated shopify formula tag catalogs the sku once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-catalog-repeat-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const product = { title: "Gentle cleanser", tags: "formula:cleanser", variants: [{ sku: "sku-cleanser" }] };
+  const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+    cwd: hub,
+    input: JSON.stringify({
+      commands: [
+        { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+        { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+      ],
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+  try {
+    const first = acceptShopifyCatalog([product, { title: "Cleanser", tags: "retail" }]);
+    assert.equal(first.ok, true);
+    assert.equal(first.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.equal(recorded.split("sku-cleanser").length - 1, 1);
+    const again = acceptShopifyCatalog([product]);
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const renamed = acceptShopifyCatalog([{ ...product, title: "Renamed cleanser" }]);
+    assert.equal(renamed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a received purchase order records materials and packaging", () => {
   const commands = purchaseReceiptCommands("PO-14", [
     { name: "Retail serum", productId: 3, quantity: 2 },

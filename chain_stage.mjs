@@ -255,6 +255,42 @@ export function shopifyCatalogCommands(products) {
   return commands;
 }
 
+function catalogIdentity(command) {
+  if (command?.command !== "catalog_sku") return null;
+  return `catalog_sku\0${command.args?.sku_id ?? ""}`;
+}
+
+function unrecordedCatalog(commands) {
+  const raw = process.env.SKINTWIN_CHAIN_LEDGER;
+  if (!raw || !existsSync(raw)) return commands;
+  const found = new Map();
+  for (const line of readFileSync(raw, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    const identity = catalogIdentity(record);
+    if (!identity) continue;
+    found.set(identity, record.args || {});
+  }
+  const fresh = [];
+  for (const command of commands) {
+    const identity = catalogIdentity(command);
+    if (!identity) {
+      fresh.push(command);
+      continue;
+    }
+    const prior = found.get(identity);
+    if (!prior) {
+      fresh.push(command);
+      continue;
+    }
+    const next = command.args || {};
+    if (prior.sku_id !== next.sku_id || prior.formula_id !== next.formula_id || prior.name !== next.name) {
+      return null;
+    }
+  }
+  return fresh;
+}
+
 export function acceptShopifyCatalog(products) {
   let commands;
   try {
@@ -263,8 +299,11 @@ export function acceptShopifyCatalog(products) {
     return { ok: false, error: error.message };
   }
   if (commands.length === 0) return { ok: true, count: 0 };
+  const fresh = unrecordedCatalog(commands);
+  if (fresh === null) return { ok: false, error: "id already exists" };
+  if (fresh.length === 0) return { ok: true, count: 0 };
   if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
-  return commitAll(commands);
+  return commitAll(fresh);
 }
 
 export function acceptOrderFulfillments(orderNumber, items, therapistId) {

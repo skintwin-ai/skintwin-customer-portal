@@ -73,6 +73,77 @@ test("a product named by formula_id is catalogued once", () => {
   }
 });
 
+test("a product named by sku_id is catalogued once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-sku-id-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = catalogProduct({ name: "Shelf", sku_id: "sku-shelf" });
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "define_formula", args: { formula_id: "serum-c", name: "Vitamin C serum", lines: [["glycerin", 2000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const preferred = catalogProduct({
+      name: "Gentle cleanser",
+      sku: "sku-cleanser",
+      sku_id: "sku-other",
+      formula_id: "cleanser",
+    });
+    assert.equal(preferred.ok, true);
+    const fallen = catalogProduct({
+      name: "Vitamin C serum",
+      sku: "  ",
+      sku_id: "  ",
+      skuId: "sku-serum",
+      formulaId: "serum-c",
+    });
+    assert.equal(fallen.ok, true);
+    const titled = catalogProduct({
+      name: "Night cream",
+      sku: "  ",
+      sku_id: "  ",
+      skuId: "  ",
+      formula_id: "cleanser",
+    });
+    assert.equal(titled.ok, true);
+    const text = readFileSync(ledger, "utf8");
+    const catalogs = text.trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.command === "catalog_sku");
+    assert.deepEqual(catalogs.map((row) => [row.args.sku_id, row.args.formula_id]), [
+      ["sku-cleanser", "cleanser"],
+      ["sku-serum", "serum-c"],
+      ["Night cream", "cleanser"],
+    ]);
+    const again = catalogProduct({ name: "Gentle cleanser", sku_id: "sku-cleanser", formula_id: "cleanser" });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    const changed = catalogProduct({ name: "Renamed", sku_id: "sku-cleanser", formula_id: "serum-c" });
+    assert.equal(changed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a product order draws stock and a service line does not", () => {
   const commands = fulfillmentCommands("order-9", [
     { type: "service", name: "Facial", sku: "svc-facial" },

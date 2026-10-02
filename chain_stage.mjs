@@ -268,7 +268,7 @@ export function catalogProduct(input) {
   return handleStage({
     command: "catalog_sku",
     args: {
-      sku_id: input.sku || input.name,
+      sku_id: namedCatalogSku(input) || input.name,
       formula_id: formulaId,
       name: input.name,
     },

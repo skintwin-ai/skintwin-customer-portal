@@ -107,6 +107,27 @@ export function acceptSaleReturn(returnId, fulfillmentId) {
   return commitAll(commands);
 }
 
+export function paymentReturnCommands(payment) {
+  if (!payment || typeof payment !== "object" || payment.status !== "refunded") return [];
+  const fulfillmentId = payment.fulfillmentId ?? payment.fulfillment_id;
+  if (fulfillmentId == null || fulfillmentId === "") return [];
+  const paymentId = payment.id ?? payment.paymentId ?? "payment";
+  const returnId = payment.returnId || payment.return_id || `return:${paymentId}:${fulfillmentId}`;
+  return saleReturnCommands(returnId, fulfillmentId);
+}
+
+export function acceptPaymentReturn(payment) {
+  let commands;
+  try {
+    commands = paymentReturnCommands(payment);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function fulfill(args) {
   const kind = text(args.kind, "kind");
   if (kind !== "retail" && kind !== "treatment") {

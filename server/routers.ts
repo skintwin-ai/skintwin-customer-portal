@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -712,6 +712,7 @@ const paymentRouter = router({
       status: z.enum(['pending', 'succeeded', 'failed', 'refunded', 'partially_refunded']).optional(),
       settlementId: z.string().optional(),
       fulfillmentId: z.string().optional(),
+      returnId: z.string().optional(),
       amount: z.number().optional(),
       currency: z.string().optional(),
     }))
@@ -722,10 +723,17 @@ const paymentRouter = router({
           throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
         }
       }
+      if (input.status === "refunded") {
+        const returned = acceptPaymentReturn(input);
+        if (!returned.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
+        }
+      }
       const {
         id,
         settlementId: _settlementId,
         fulfillmentId: _fulfillmentId,
+        returnId: _returnId,
         amount: _amount,
         currency: _currency,
         ...data

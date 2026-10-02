@@ -787,7 +787,7 @@ const paymentRouter = router({
       }
       if (input.status === "refunded") {
         let returned;
-        if (sale.fulfillmentId) {
+        if (sale.fulfillmentId || sale.settlementId) {
           returned = acceptPaymentReturn(input);
         } else {
           const stored = await db.getPayment(input.id);

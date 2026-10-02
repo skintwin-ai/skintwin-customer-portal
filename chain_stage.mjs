@@ -129,6 +129,10 @@ export function paymentReturnCommands(payment) {
   if (!payment || typeof payment !== "object" || payment.status !== "refunded") return [];
   const sale = namedSale(payment);
   let fulfillmentId = sale.fulfillmentId;
+  if (!fulfillmentId && sale.settlementId) {
+    fulfillmentId = settledFulfillment(sale.settlementId);
+    if (!fulfillmentId) return [];
+  }
   if (!fulfillmentId) {
     const processorId = paymentProcessorId(payment);
     fulfillmentId = processorId ? settledFulfillment(`pay-${processorId}`) : "";
@@ -225,6 +229,16 @@ function settledFulfillment(settlementId) {
   return found;
 }
 
+function chargeSettlementId(charge) {
+  const stated = chargeMetadata(charge, "settlement_id") || chargeMetadata(charge, "settlementId");
+  if (stated) return stated;
+  const intent = charge?.payment_intent;
+  if (intent && typeof intent === "object" && !Array.isArray(intent)) {
+    return chargeMetadata(intent, "settlement_id") || chargeMetadata(intent, "settlementId");
+  }
+  return "";
+}
+
 function chargeFulfillmentId(charge) {
   const stated = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
   if (stated) return stated;
@@ -233,6 +247,8 @@ function chargeFulfillmentId(charge) {
     const named = chargeMetadata(intent, "fulfillment_id") || chargeMetadata(intent, "fulfillmentId");
     if (named) return named;
   }
+  const settlementId = chargeSettlementId(charge);
+  if (settlementId) return settledFulfillment(settlementId);
   const intentId = paymentIntentId(charge);
   if (!intentId) return "";
   return settledFulfillment(`pay-${intentId}`);
@@ -263,7 +279,7 @@ export function acceptChargeReturn(charge) {
 export function chargeStoredSaleReturns(charge, orderNumber, items) {
   if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
   const fulfillmentId = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
-  if (fulfillmentId) return [];
+  if (fulfillmentId || chargeSettlementId(charge)) return [];
   const chargeId = charge.id == null || String(charge.id).trim() === "" ? "" : String(charge.id).trim();
   return orderSaleReturns(orderNumber, items, chargeId);
 }

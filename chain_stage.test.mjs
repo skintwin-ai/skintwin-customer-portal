@@ -1728,6 +1728,8 @@ test("a refunded payment returns the sale it names", () => {
   assert.deepEqual(paymentReturnCommands({ status: "refunded", id: 3 }), []);
   assert.deepEqual(paymentReturnCommands({ status: "refunded", id: 3, processorPaymentId: "pi_pay" }), []);
   assert.deepEqual(paymentReturnCommands({ status: "partially_refunded", id: 3, processorPaymentId: "pi_pay" }), []);
+  assert.deepEqual(paymentReturnCommands({ status: "refunded", id: 3, settlement_id: "pay-snake" }), []);
+  assert.deepEqual(paymentReturnCommands({ status: "partially_refunded", id: 3, settlement_id: "pay-snake" }), []);
   assert.deepEqual(paymentReturnCommands({ status: "refunded", id: 3, fulfillmentId }), [
     {
       command: "return_sale",
@@ -1764,6 +1766,8 @@ test("a refunded payment returns the sale it names", () => {
           { command: "fulfill", args: { fulfillment_id: fulfillmentId, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-pi_pay", fulfillment_id: "order-settled:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-named:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 1000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-snake", fulfillment_id: "order-named:0:sku-cleanser", amount_cents: 1000, currency: "USD" } },
         ],
       }),
       encoding: "utf8",
@@ -1781,9 +1785,19 @@ test("a refunded payment returns the sale it names", () => {
       status: "refunded",
       id: 3,
       fulfillmentId: "missing-order",
+      settlement_id: "pay-snake",
       processorPaymentId: "pi_pay",
     });
     assert.equal(missed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const absent = acceptPaymentReturn({
+      status: "refunded",
+      id: 3,
+      settlement_id: "pay-absent",
+      processorPaymentId: "pi_pay",
+    });
+    assert.equal(absent.ok, true);
+    assert.equal(absent.count, 0);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
     const fromProcessor = acceptPaymentReturn({ status: "refunded", id: 3, processorPaymentId: "pi_pay" });
     assert.equal(fromProcessor.ok, true);
@@ -1794,6 +1808,20 @@ test("a refunded payment returns the sale it names", () => {
     const settledAgain = acceptPaymentReturn({ status: "refunded", id: 3, processorPaymentId: "pi_pay" });
     assert.equal(settledAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), settledText);
+    const fromSettlement = acceptPaymentReturn({ status: "refunded", id: 3, settlement_id: "pay-snake" });
+    assert.equal(fromSettlement.ok, true);
+    assert.equal(fromSettlement.count, 1);
+    const namedText = readFileSync(ledger, "utf8");
+    assert.equal(namedText.includes('"return_id": "return:3:order-named:0:sku-cleanser"'), true);
+    assert.equal(namedText.includes('"return_id": "return:to-cape-town"'), false);
+    const namedAgain = acceptPaymentReturn({
+      status: "refunded",
+      id: 3,
+      settlement_id: "pay-snake",
+      processorPaymentId: "pi_pay",
+    });
+    assert.equal(namedAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), namedText);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
@@ -1841,6 +1869,18 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     },
   ]);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_miss", payment_intent: "pi_missing" }), []);
+  assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
+  assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_1",
+    metadata: { fulfillment_id: fulfillmentId, settlement_id: "pay-snake" },
+  }), [
+    {
+      command: "return_sale",
+      args: { return_id: `return:ch_1:${fulfillmentId}`, fulfillment_id: fulfillmentId },
+    },
+  ]);
   const skipped = acceptChargeReturn({ refunded: true, id: "ch_plain" });
   assert.equal(skipped.ok, true);
   assert.equal(skipped.count, 0);
@@ -1872,6 +1912,8 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
           { command: "fulfill", args: { fulfillment_id: intentFulfillment, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-pi_1", fulfillment_id: "order-settled:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-named:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-snake", fulfillment_id: "order-named:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
         ],
       }),
       encoding: "utf8",
@@ -1911,6 +1953,33 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     const settledAgain = acceptChargeReturn({ refunded: true, id: "ch_pi", payment_intent: "pi_1" });
     assert.equal(settledAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), settledText);
+    const absentSettlement = acceptChargeReturn({
+      refunded: true,
+      id: "ch_absent",
+      metadata: { settlement_id: "pay-absent" },
+      payment_intent: "pi_1",
+    });
+    assert.equal(absentSettlement.ok, true);
+    assert.equal(absentSettlement.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), settledText);
+    const fromNamed = acceptChargeReturn({
+      refunded: true,
+      id: "ch_snake",
+      payment_intent: { id: "pi_1", metadata: { settlement_id: "pay-snake" } },
+    });
+    assert.equal(fromNamed.ok, true, fromNamed.error);
+    assert.equal(fromNamed.count, 1);
+    const namedText = readFileSync(ledger, "utf8");
+    assert.match(namedText, /return:ch_snake:order-named:0:sku-cleanser/);
+    assert.doesNotMatch(namedText, /return:to-cape-town/);
+    const namedAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_snake",
+      metadata: { settlement_id: "pay-snake" },
+      payment_intent: "pi_1",
+    });
+    assert.equal(namedAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), namedText);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
@@ -2455,6 +2524,22 @@ test("a refunded charge returns the sale stored on its order once", () => {
   assert.deepEqual(
     chargeStoredSaleReturns(
       { refunded: true, id: "ch_1", metadata: { fulfillment_id: "order-9:0:sku-cleanser" } },
+      "order-9",
+      lines,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    chargeStoredSaleReturns(
+      { refunded: true, id: "ch_1", metadata: { settlement_id: "pay-snake" } },
+      "order-9",
+      lines,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    chargeStoredSaleReturns(
+      { refunded: true, id: "ch_1", payment_intent: { id: "pi_1", metadata: { settlement_id: "pay-snake" } } },
       "order-9",
       lines,
     ),

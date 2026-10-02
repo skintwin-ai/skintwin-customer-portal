@@ -98,19 +98,95 @@ export function recordPaymentIntentSettlement(intent) {
   return recordSettlement(settlement);
 }
 
+function invoiceCurrency(invoice) {
+  const currency = String(invoice.currency || "USD").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  return currency;
+}
+
+function invoiceLines(invoice) {
+  const lines = invoice.lines;
+  if (lines && typeof lines === "object" && Array.isArray(lines.data)) return lines.data;
+  if (Array.isArray(lines)) return lines;
+  return [];
+}
+
+function lineFulfillmentId(line) {
+  if (!line || typeof line !== "object") return "";
+  const metadata = metadataObject(line.metadata);
+  return (
+    named(line.fulfillment_id) ||
+    named(line.fulfillmentId) ||
+    named(metadata.fulfillment_id) ||
+    named(metadata.fulfillmentId)
+  );
+}
+
 export function paidInvoiceSettlement(invoice) {
   if (!invoice || typeof invoice !== "object") throw new Error("invoice is required");
   const metadata = metadataObject(invoice.metadata);
   const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const currency = String(invoice.currency || "USD").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const currency = invoiceCurrency(invoice);
   const invoiceId = named(invoice.id) || fulfillmentId;
   const settlementId =
     named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${invoiceId}`;
   const cents = minorUnits(invoice.amount_paid);
   if (cents == null) throw new Error("amount must be a positive integer");
   return { settlementId, fulfillmentId, amountCents: cents, currency };
+}
+
+export function paidInvoiceLineSettlements(invoice) {
+  if (!invoice || typeof invoice !== "object") throw new Error("invoice is required");
+  const metadata = metadataObject(invoice.metadata);
+  if (named(metadata.fulfillment_id) || named(metadata.fulfillmentId)) return [];
+  const groups = new Map();
+  for (const line of invoiceLines(invoice)) {
+    const fulfillmentId = lineFulfillmentId(line);
+    if (!fulfillmentId) continue;
+    const cents = minorUnits(line.amount ?? line.amount_cents);
+    if (cents == null) throw new Error("amount must be a positive integer");
+    groups.set(fulfillmentId, (groups.get(fulfillmentId) || 0) + cents);
+  }
+  if (groups.size === 0) return [];
+  const currency = invoiceCurrency(invoice);
+  const invoiceId = named(invoice.id) || "invoice";
+  const explicit = named(metadata.settlement_id) || named(metadata.settlementId);
+  return [...groups.entries()].map(([fulfillmentId, amountCents], index) => ({
+    settlementId:
+      groups.size === 1 && explicit
+        ? explicit
+        : groups.size === 1
+          ? `pay-${invoiceId}`
+          : `pay-${invoiceId}:${index}:${fulfillmentId}`,
+    fulfillmentId,
+    amountCents,
+    currency,
+  }));
+}
+
+function recordSettlements(payments) {
+  const commands = payments.map((payment) => settlementCommand(payment)).filter(Boolean);
+  if (commands.length !== payments.length) return { ok: false, error: "fulfillment_id is required" };
+  const locate = loadChainLocate();
+  if (!locate) return { ok: false, error: "supply-chain hub is not present" };
+  const stage = process.env.SKINTWIN_ACCOUNT_STAGE || locate.stageEntry("account");
+  if (!stage) return { ok: false, error: "settlement stage is not present" };
+  locate.bindLedger();
+  const child = spawnSync("python3", [stage], {
+    input: JSON.stringify({ commands }),
+    encoding: "utf8",
+  });
+  let payload = {};
+  try {
+    payload = JSON.parse(child.stdout || "{}");
+  } catch {
+    payload = {};
+  }
+  if (child.status !== 0 || !payload.ok) {
+    return { ok: false, error: payload.error || child.stderr || "settlement rejected" };
+  }
+  return { ok: true, recorded: true, count: commands.length };
 }
 
 export function recordInvoiceSettlement(invoice) {
@@ -120,8 +196,16 @@ export function recordInvoiceSettlement(invoice) {
   } catch (error) {
     return { ok: false, error: error.message };
   }
-  if (!settlement) return { ok: true, recorded: false };
-  return recordSettlement(settlement);
+  if (settlement) return recordSettlement(settlement);
+  let lines;
+  try {
+    lines = paidInvoiceLineSettlements(invoice);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (lines.length === 0) return { ok: true, recorded: false };
+  if (lines.length === 1) return recordSettlement(lines[0]);
+  return recordSettlements(lines);
 }
 
 export function paystackInitializeMetadata(input = {}) {

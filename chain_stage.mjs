@@ -172,25 +172,39 @@ export function fulfill(args) {
   };
 }
 
+function namedSku(item) {
+  if (typeof item?.sku === "string" && item.sku.trim() !== "") return item.sku.trim();
+  if (typeof item?.sku_id === "string" && item.sku_id.trim() !== "") return item.sku_id.trim();
+  if (typeof item?.skuId === "string" && item.skuId.trim() !== "") return item.skuId.trim();
+  return "";
+}
+
+function namedPractitioner(item, therapistId) {
+  if (typeof item?.practitionerId === "string" && item.practitionerId.trim() !== "") return item.practitionerId.trim();
+  if (typeof item?.practitioner_id === "string" && item.practitioner_id.trim() !== "") return item.practitioner_id.trim();
+  if (therapistId == null) return undefined;
+  return String(therapistId);
+}
+
 export function fulfillmentCommands(orderNumber, items, therapistId) {
   const orderId = text(orderNumber, "order number");
   if (!Array.isArray(items)) throw new Error("order items are required");
   const commands = [];
   items.forEach((item, index) => {
     const type = item?.type || "product";
-    if (type === "service" || !item?.sku) return;
+    const sku = namedSku(item);
+    if (type === "service" || !sku) return;
     if (type !== "product" && type !== "treatment") {
       throw new Error(`unknown item type ${type}`);
     }
     if (typeof item.location !== "string" || !Number.isInteger(item.milligrams)) {
-      throw new Error(`sku ${item.sku} requires location and milligrams`);
+      throw new Error(`sku ${sku} requires location and milligrams`);
     }
     const kind = type === "treatment" ? "treatment" : "retail";
-    const practitioner =
-      item.practitionerId || (therapistId == null ? undefined : String(therapistId));
+    const practitioner = namedPractitioner(item, therapistId);
     const args = {
-      fulfillment_id: `${orderId}:${index}:${item.sku}`,
-      sku_id: item.sku,
+      fulfillment_id: `${orderId}:${index}:${sku}`,
+      sku_id: sku,
       location: item.location,
       milligrams: item.milligrams,
       kind,
@@ -362,7 +376,7 @@ export function acceptOrderFulfillments(orderNumber, items, therapistId) {
 export function treatmentProductCommands(reference, productsUsed, practitionerId) {
   if (productsUsed == null) return [];
   if (!Array.isArray(productsUsed)) throw new Error("productsUsed must be a list");
-  const chainItems = productsUsed.filter((item) => item && item.sku);
+  const chainItems = productsUsed.filter((item) => namedSku(item));
   if (chainItems.length === 0) return [];
   text(reference, "treatment reference");
   return fulfillmentCommands(

@@ -118,6 +118,81 @@ test("a treatment product list without a sku does not draw stock", () => {
   assert.equal(skipped.count, 0);
 });
 
+test("a treatment named by sku_id draws that product once", () => {
+  const named = treatmentProductCommands("tx-1", [
+    { sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, practitioner_id: "aya" },
+    { sku: "sku-serum-c", sku_id: "sku-other", location: "cape-town", milligrams: 1000, practitionerId: "nia" },
+    { productId: 4, quantity: 1 },
+  ]);
+  assert.equal(named.length, 2);
+  assert.equal(named[0].args.fulfillment_id, "tx-1:0:sku-cleanser");
+  assert.equal(named[0].args.sku_id, "sku-cleanser");
+  assert.equal(named[0].args.practitioner_id, "aya");
+  assert.equal(named[0].args.kind, "treatment");
+  assert.equal(named[1].args.sku_id, "sku-serum-c");
+  assert.equal(named[1].args.practitioner_id, "nia");
+  const retail = fulfillmentCommands("order-9", [
+    { type: "service", sku_id: "svc-facial", location: "cape-town", milligrams: 1000 },
+    { skuId: "sku-cleanser", location: "cape-town", milligrams: 2000 },
+  ]);
+  assert.equal(retail.length, 1);
+  assert.equal(retail[0].args.fulfillment_id, "order-9:1:sku-cleanser");
+  assert.equal(retail[0].args.kind, "retail");
+  assert.throws(
+    () => treatmentProductCommands("tx-1", [{ sku_id: "sku-cleanser" }]),
+    /location and milligrams/,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-sku-id-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = acceptTreatmentProducts("tx-1", [{ productId: 4 }]);
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.count, 0);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "xfer-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 2000 } },
+          { command: "certify_practitioner", args: { certificate_id: "cert-aya", practitioner_id: "aya", course: "Facial protocol" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const drawn = acceptTreatmentProducts("tx-1", [
+      { sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, practitioner_id: "aya" },
+    ]);
+    assert.equal(drawn.ok, true);
+    assert.equal(drawn.count, 1);
+    const text = readFileSync(ledger, "utf8");
+    assert.equal(text.includes('"fulfillment_id": "tx-1:0:sku-cleanser"'), true);
+    const again = acceptTreatmentProducts("tx-1", [
+      { sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, practitioner_id: "aya" },
+    ]);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a treatment product with a sku is a treatment fulfillment", () => {
   const commands = treatmentProductCommands(
     "tx-aya",

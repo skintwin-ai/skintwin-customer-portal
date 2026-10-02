@@ -445,8 +445,23 @@ export function acceptTreatmentProducts(reference, productsUsed, practitionerId)
 }
 
 function named(item, snake, camel) {
-  const value = item?.[snake] ?? item?.[camel];
-  return typeof value === "string" ? value.trim() : "";
+  for (const key of [snake, camel]) {
+    const value = item?.[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return "";
+}
+
+function namedKilograms(item) {
+  for (const key of ["quantity_kg", "quantityKg"]) {
+    const value = item?.[key];
+    if (typeof value === "string") {
+      if (value.trim() === "") continue;
+      return value.trim();
+    }
+    if (typeof value === "number" && !Number.isNaN(value)) return value;
+  }
+  return null;
 }
 
 function kilogramsToMilligrams(value) {
@@ -489,7 +504,7 @@ export function purchaseReceiptCommands(poNumber, receipts) {
     }
     let milligrams = item.milligrams;
     if (milligrams == null) {
-      const kilograms = item.quantity_kg ?? item.quantityKg;
+      const kilograms = namedKilograms(item);
       if (kilograms == null) throw new Error("milligrams must be a positive integer");
       milligrams = kilogramsToMilligrams(kilograms);
     } else if (typeof milligrams !== "number" || !Number.isInteger(milligrams) || milligrams < 1) {

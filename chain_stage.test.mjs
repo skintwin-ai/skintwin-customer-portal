@@ -709,6 +709,124 @@ test("a receipt named by ledger fields records that lot once", () => {
   }
 });
 
+test("a receipt named by a blank ledger field records the camel lot once", () => {
+  const preferred = purchaseReceiptCommands("PO-15", [
+    {
+      ingredient_id: "niacinamide",
+      ingredientId: "glycerin",
+      qualification_id: "qual-snake",
+      qualificationId: "qual-camel",
+      lot_id: "lot-snake",
+      lotId: "lot-camel",
+      quantity_kg: 0.01,
+      quantityKg: 0.02,
+    },
+  ]);
+  assert.equal(preferred[0].args.ingredient_id, "niacinamide");
+  assert.equal(preferred[0].args.qualification_id, "qual-snake");
+  assert.equal(preferred[0].args.lot_id, "lot-snake");
+  assert.equal(preferred[0].args.milligrams, 10000);
+  const fallen = purchaseReceiptCommands("PO-15", [
+    { name: "Retail serum", ingredient_id: "  ", component_id: "  " },
+    {
+      ingredient_id: "  ",
+      ingredientId: "glycerin",
+      qualification_id: "  ",
+      qualificationId: "qual-glycerin",
+      lot_id: "  ",
+      lotId: "lot-glyc-15",
+      quantity_kg: "  ",
+      quantityKg: 0.02,
+    },
+    {
+      component_id: "  ",
+      componentId: "tube-cleanser",
+      name: "Cleanser tube",
+      supplier_name: "  ",
+      supplierName: "Joburg Tubes",
+      lot_id: "  ",
+      lotId: "pack-15",
+      pieces: 4,
+    },
+  ]);
+  assert.equal(fallen.length, 2);
+  assert.equal(fallen[0].args.ingredient_id, "glycerin");
+  assert.equal(fallen[0].args.qualification_id, "qual-glycerin");
+  assert.equal(fallen[0].args.lot_id, "lot-glyc-15");
+  assert.equal(fallen[0].args.milligrams, 20000);
+  assert.equal(fallen[1].args.component_id, "tube-cleanser");
+  assert.equal(fallen[1].args.supplier_name, "Joburg Tubes");
+  assert.equal(fallen[1].args.lot_id, "pack-15");
+  const supplier = supplierQualificationCommands({
+    name: "Inland Humectants",
+    ingredient_id: "  ",
+    ingredientId: "glycerin",
+    qualification_id: "  ",
+    qualificationId: "qual-glycerin",
+  });
+  assert.equal(supplier[0].args.ingredient_id, "glycerin");
+  assert.equal(supplier[0].args.qualification_id, "qual-glycerin");
+  const dir = mkdtempSync(join(tmpdir(), "portal-receipt-blank-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const lines = [
+    { name: "Retail serum" },
+    {
+      ingredient_id: "  ",
+      ingredientId: "glycerin",
+      qualification_id: "  ",
+      qualificationId: "qual-glycerin",
+      lot_id: "  ",
+      lotId: "lot-glyc-15",
+      quantity_kg: "  ",
+      quantityKg: 0.02,
+    },
+    {
+      component_id: "  ",
+      componentId: "tube-cleanser",
+      name: "Cleanser tube",
+      supplier_name: "  ",
+      supplierName: "Joburg Tubes",
+      lot_id: "  ",
+      lotId: "pack-15",
+      pieces: 4,
+    },
+  ];
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const received = acceptPurchaseReceipt("PO-15", lines);
+    assert.equal(received.ok, true);
+    assert.equal(received.count, 2);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /lot-glyc-15/);
+    assert.match(recorded, /pack-15/);
+    const again = acceptPurchaseReceipt("PO-15", lines);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("an ingredient receipt without a quantity is rejected", () => {
   assert.throws(
     () => purchaseReceiptCommands("PO-14", [{ ingredientId: "glycerin", qualificationId: "qual-glycerin" }]),

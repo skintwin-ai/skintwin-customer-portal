@@ -163,6 +163,66 @@ test("a shopify product without a formula tag is not a catalog sku", () => {
   assert.equal(skipped.count, 0);
 });
 
+test("each shopify variant sku of a formula is catalogued once", () => {
+  const commands = shopifyCatalogCommands([
+    {
+      title: "Gentle cleanser",
+      tags: "formula:cleanser",
+      variants: [{ sku: "sku-cleanser-30" }, { sku: " " }, { sku: "sku-cleanser-30" }, { sku: "sku-cleanser-50" }],
+    },
+  ]);
+  assert.deepEqual(commands.map((command) => command.args.sku_id), ["sku-cleanser-30", "sku-cleanser-50"]);
+  const fallback = shopifyCatalogCommands([
+    { title: "Gentle cleanser", tags: "formula:cleanser", variants: [{ sku: " " }] },
+  ]);
+  assert.equal(fallback[0].args.sku_id, "Gentle cleanser");
+  const dir = mkdtempSync(join(tmpdir(), "portal-catalog-variants-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const product = {
+    title: "Gentle cleanser",
+    tags: "formula:cleanser",
+    variants: [{ sku: "sku-cleanser-30" }, { sku: "sku-cleanser-50" }],
+  };
+  const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+    cwd: hub,
+    input: JSON.stringify({
+      commands: [
+        { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+        { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+      ],
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+  try {
+    const unnamed = acceptShopifyCatalog([{ title: "Cleanser", tags: "retail", variants: [{ sku: "sku-a" }, { sku: "sku-b" }] }]);
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.count, 0);
+    const first = acceptShopifyCatalog([product]);
+    assert.equal(first.ok, true);
+    assert.equal(first.count, 2);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.equal(recorded.split("sku-cleanser-30").length - 1, 1);
+    assert.equal(recorded.split("sku-cleanser-50").length - 1, 1);
+    const again = acceptShopifyCatalog([product]);
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a shopify formula tag becomes a catalog sku", () => {
   const commands = shopifyCatalogCommands([
     {

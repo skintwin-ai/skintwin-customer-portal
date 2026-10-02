@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import type Stripe from "stripe";
 import * as db from "./db";
 import { constructWebhookEvent } from "./integrations/stripe";
-import { recordPaymentIntentSettlement } from "./supplyChain";
+import { recordPaymentIntentSettlement, acceptChargeReturn } from "./supplyChain";
 
 export function createStripeWebhookRouter(): Router {
   const router = Router();
@@ -33,6 +33,8 @@ export function createStripeWebhookRouter(): Router {
           await handlePaymentIntentSucceeded(event.data.object as Stripe.PaymentIntent);
         } else if (event.type === "payment_intent.payment_failed") {
           await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
+        } else if (event.type === "charge.refunded") {
+          await handleChargeRefunded(event.data.object as Stripe.Charge);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "webhook failed";
@@ -66,4 +68,18 @@ async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
   if (payment) {
     await db.updatePayment(payment.id, { status: "failed" });
   }
+}
+
+async function handleChargeRefunded(charge: Stripe.Charge) {
+  const returned = acceptChargeReturn(charge);
+  if (!returned.ok) {
+    throw new Error(returned.error);
+  }
+  const paymentIntent = charge.payment_intent;
+  const processorId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id || charge.id;
+  const payment = await db.getPaymentByProcessorId(processorId);
+  if (!payment) return;
+  await db.updatePayment(payment.id, {
+    status: charge.refunded ? "refunded" : "partially_refunded",
+  });
 }

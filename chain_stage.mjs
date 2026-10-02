@@ -128,6 +128,35 @@ export function acceptPaymentReturn(payment) {
   return commitAll(commands);
 }
 
+function chargeMetadata(charge, key) {
+  const metadata = charge?.metadata;
+  if (!metadata || typeof metadata !== "object") return "";
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function chargeReturnCommands(charge) {
+  if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
+  const fulfillmentId = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
+  if (!fulfillmentId) return [];
+  const chargeId = text(String(charge.id ?? ""), "charge");
+  const returnId =
+    chargeMetadata(charge, "return_id") || chargeMetadata(charge, "returnId") || `return:${chargeId}:${fulfillmentId}`;
+  return saleReturnCommands(returnId, fulfillmentId);
+}
+
+export function acceptChargeReturn(charge) {
+  let commands;
+  try {
+    commands = chargeReturnCommands(charge);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function fulfill(args) {
   const kind = text(args.kind, "kind");
   if (kind !== "retail" && kind !== "treatment") {

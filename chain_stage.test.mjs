@@ -1872,6 +1872,62 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
   assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_inv", invoice: "in_1" }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_inv_meta",
+    invoice: {
+      id: "in_1",
+      metadata: { fulfillment_id: "order-stated" },
+      lines: { data: [{ fulfillment_id: "order-line" }] },
+    },
+    payment_intent: "pi_1",
+  }), [
+    {
+      command: "return_sale",
+      args: { return_id: "return:ch_inv_meta:order-stated", fulfillment_id: "order-stated" },
+    },
+  ]);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_inv_lines_cmd",
+    invoice: {
+      id: "in_x",
+      metadata: { settlement_id: "pay-snake" },
+      lines: { data: [{ fulfillment_id: "order-a" }, { metadata: { fulfillment_id: "order-b" } }] },
+    },
+    payment_intent: "pi_1",
+  }), [
+    {
+      command: "return_sale",
+      args: { return_id: "return:ch_inv_lines_cmd:order-a", fulfillment_id: "order-a" },
+    },
+    {
+      command: "return_sale",
+      args: { return_id: "return:ch_inv_lines_cmd:order-b", fulfillment_id: "order-b" },
+    },
+  ]);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_inv_settle_cmd",
+    invoice: { id: "in_1", metadata: { settlement_id: "pay-snake" } },
+    payment_intent: "pi_1",
+  }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_nested",
+    payment_intent: { id: "pi_1", invoice: { id: "in_nested", metadata: { fulfillment_id: "order-nested" } } },
+  }), [
+    {
+      command: "return_sale",
+      args: { return_id: "return:ch_nested:order-nested", fulfillment_id: "order-nested" },
+    },
+  ]);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_string",
+    invoice: "in_1",
+    payment_intent: { id: "pi_1", invoice: { id: "in_nested", metadata: { fulfillment_id: "order-nested" } } },
+  }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_inv", invoice: { id: "in_1" } }), []);
   assert.deepEqual(chargeReturnCommands({
     refunded: true,
@@ -1932,11 +1988,11 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
         commands: [
           { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
           { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
-          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 16000 } },
-          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 16000]] } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 24000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 24000]] } },
           { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
-          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 16000]] } },
-          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 16000 } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 24000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 24000 } },
           { command: "fulfill", args: { fulfillment_id: fulfillmentId, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: intentFulfillment, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
@@ -1951,6 +2007,12 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
           { command: "settle", args: { settlement_id: "pay-in_lines:1:order-lines:1:sku-cleanser", fulfillment_id: "order-lines:1:sku-cleanser", amount_cents: 2000, currency: "USD" } },
           { command: "fulfill", args: { fulfillment_id: "order-in10:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-in_10", fulfillment_id: "order-in10:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-stated:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-explicit:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-explicit", fulfillment_id: "order-explicit:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-fresh:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_fresh", fulfillment_id: "order-fresh:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-on-line:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
         ],
       }),
       encoding: "utf8",
@@ -2094,6 +2156,105 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     assert.doesNotMatch(tenText, /return:ch_in10:order-invoice/);
     assert.doesNotMatch(tenText, /return:ch_in10:order-lines/);
     assert.doesNotMatch(tenText, /return:to-cape-town/);
+    const missingInvoiceFulfillment = acceptChargeReturn({
+      refunded: true,
+      id: "ch_miss_inv",
+      invoice: { id: "in_fresh", metadata: { fulfillment_id: "missing-order" } },
+      payment_intent: "pi_1",
+    });
+    assert.equal(missingInvoiceFulfillment.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), tenText);
+    const absentInvoiceSettlement = acceptChargeReturn({
+      refunded: true,
+      id: "ch_inv_absent",
+      invoice: { id: "in_fresh", metadata: { settlementId: "pay-absent" } },
+      payment_intent: "pi_1",
+    });
+    assert.equal(absentInvoiceSettlement.ok, true);
+    assert.equal(absentInvoiceSettlement.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), tenText);
+    const fromInvoiceFulfillment = acceptChargeReturn({
+      refunded: true,
+      id: "ch_stated",
+      invoice: {
+        id: "in_fresh",
+        metadata: { fulfillment_id: "order-stated:0:sku-cleanser" },
+        lines: { data: [{ fulfillment_id: "order-on-line:0:sku-cleanser" }] },
+      },
+      payment_intent: "pi_1",
+    });
+    assert.equal(fromInvoiceFulfillment.ok, true, fromInvoiceFulfillment.error);
+    assert.equal(fromInvoiceFulfillment.count, 1);
+    const statedText = readFileSync(ledger, "utf8");
+    assert.match(statedText, /return:ch_stated:order-stated:0:sku-cleanser/);
+    assert.doesNotMatch(statedText, /return:ch_stated:order-fresh/);
+    assert.doesNotMatch(statedText, /return:ch_stated:order-on-line/);
+    assert.doesNotMatch(statedText, /return:ch_stated:order-settled/);
+    assert.doesNotMatch(statedText, /return:to-cape-town/);
+    const statedAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_stated",
+      invoice: { id: "in_fresh", metadata: { fulfillment_id: "order-stated:0:sku-cleanser" } },
+    });
+    assert.equal(statedAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), statedText);
+    const fromInvoiceLines = acceptChargeReturn({
+      refunded: true,
+      id: "ch_inv_lines",
+      invoice: { id: "in_fresh", lines: [{ fulfillment_id: "order-on-line:0:sku-cleanser" }] },
+      payment_intent: "pi_1",
+    });
+    assert.equal(fromInvoiceLines.ok, true, fromInvoiceLines.error);
+    assert.equal(fromInvoiceLines.count, 1);
+    const onLineText = readFileSync(ledger, "utf8");
+    assert.match(onLineText, /return:ch_inv_lines:order-on-line:0:sku-cleanser/);
+    assert.doesNotMatch(onLineText, /return:ch_inv_lines:order-fresh/);
+    assert.doesNotMatch(onLineText, /return:to-cape-town/);
+    const onLineAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_inv_lines",
+      invoice: { id: "in_fresh", lines: [{ fulfillmentId: "order-on-line:0:sku-cleanser" }] },
+    });
+    assert.equal(onLineAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), onLineText);
+    const fromInvoiceSettlement = acceptChargeReturn({
+      refunded: true,
+      id: "ch_inv_settle",
+      invoice: { id: "in_other", metadata: { settlement_id: "pay-explicit" } },
+      payment_intent: "pi_1",
+    });
+    assert.equal(fromInvoiceSettlement.ok, true, fromInvoiceSettlement.error);
+    assert.equal(fromInvoiceSettlement.count, 1);
+    const explicitText = readFileSync(ledger, "utf8");
+    assert.match(explicitText, /return:ch_inv_settle:order-explicit:0:sku-cleanser/);
+    assert.doesNotMatch(explicitText, /return:ch_inv_settle:order-fresh/);
+    assert.doesNotMatch(explicitText, /return:to-cape-town/);
+    const explicitAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_inv_settle",
+      payment_intent: { id: "pi_1", invoice: { id: "in_other", metadata: { settlementId: "pay-explicit" } } },
+    });
+    assert.equal(explicitAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), explicitText);
+    const fromFresh = acceptChargeReturn({
+      refunded: true,
+      id: "ch_fresh",
+      invoice: "in_fresh",
+      payment_intent: "pi_1",
+    });
+    assert.equal(fromFresh.ok, true, fromFresh.error);
+    assert.equal(fromFresh.count, 1);
+    const freshText = readFileSync(ledger, "utf8");
+    assert.match(freshText, /return:ch_fresh:order-fresh:0:sku-cleanser/);
+    assert.doesNotMatch(freshText, /return:ch_fresh:order-stated/);
+    assert.doesNotMatch(freshText, /return:to-cape-town/);
+    const freshAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_fresh",
+      invoice: { id: "in_fresh" },
+    });
+    assert.equal(freshAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), freshText);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

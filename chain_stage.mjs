@@ -275,6 +275,28 @@ function chargeInvoiceId(charge) {
   return "";
 }
 
+function chargeInvoiceRecord(charge) {
+  const direct = charge?.invoice;
+  if (typeof direct === "string" && direct.trim()) return null;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+  const intent = charge?.payment_intent;
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) return null;
+  const nested = intent.invoice;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) return nested;
+  return null;
+}
+
+function expandedInvoiceFulfillments(invoice, invoiceId) {
+  const named = voidedInvoiceFulfillments(invoice);
+  if (named.length > 0) return named;
+  const settlementId = invoiceMetadata(invoice, "settlement_id") || invoiceMetadata(invoice, "settlementId");
+  if (settlementId) {
+    const found = settledFulfillment(settlementId);
+    return found ? [found] : [];
+  }
+  return recordedInvoiceFulfillments(invoiceId);
+}
+
 export function chargeReturnCommands(charge) {
   if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
   const stated = statedChargeFulfillment(charge);
@@ -286,7 +308,13 @@ export function chargeReturnCommands(charge) {
     return chargeSaleReturns(charge, [found]);
   }
   const invoiceId = chargeInvoiceId(charge);
-  if (invoiceId) return chargeSaleReturns(charge, recordedInvoiceFulfillments(invoiceId));
+  if (invoiceId) {
+    const record = chargeInvoiceRecord(charge);
+    const fulfillments = record
+      ? expandedInvoiceFulfillments(record, invoiceId)
+      : recordedInvoiceFulfillments(invoiceId);
+    return chargeSaleReturns(charge, fulfillments);
+  }
   const intentId = paymentIntentId(charge);
   if (!intentId) return [];
   const found = settledFulfillment(`pay-${intentId}`);

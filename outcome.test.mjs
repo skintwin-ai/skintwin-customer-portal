@@ -26,9 +26,7 @@ test("a measured outcome against an empty ledger is rejected", async () => {
   const dir = mkdtempSync(join(tmpdir(), "outcome-chain-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
-  const previousHub = process.env.SKINTWIN_HUB_ROOT;
   process.env.SKINTWIN_CHAIN_LEDGER = ledger;
-  process.env.SKINTWIN_HUB_ROOT = "/agent/repos/skintwin-ecosystem-design";
   try {
     const result = recordSkinOutcome({
       outcomeId: "outcome-1",
@@ -40,7 +38,5 @@ test("a measured outcome against an empty ledger is rejected", async () => {
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
-    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
-    else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });

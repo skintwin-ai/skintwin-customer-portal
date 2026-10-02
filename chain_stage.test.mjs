@@ -34,9 +34,7 @@ test("a sku sale against an empty ledger is rejected", () => {
   const dir = mkdtempSync(join(tmpdir(), "portal-chain-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
-  const previousHub = process.env.SKINTWIN_HUB_ROOT;
   process.env.SKINTWIN_CHAIN_LEDGER = ledger;
-  process.env.SKINTWIN_HUB_ROOT = "/agent/repos/skintwin-ecosystem-design";
   try {
     const result = handleStage({
       command: "fulfill",
@@ -52,8 +50,6 @@ test("a sku sale against an empty ledger is rejected", () => {
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
-    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
-    else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
 

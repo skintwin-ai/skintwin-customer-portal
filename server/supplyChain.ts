@@ -1,17 +1,7 @@
-import { existsSync } from "node:fs";
-import { fulfillmentCommands, handleStage } from "../chain_stage.mjs";
+import { fulfillmentCommands, handleStage, useSharedLedger } from "../chain_stage.mjs";
 import { recordSkinOutcome } from "../outcome.mjs";
 
 export { recordSkinOutcome };
-
-function useSharedLedger() {
-  const hub = process.env.SKINTWIN_HUB_ROOT
-    || ["/agent/repos/skintwin-ecosystem-design", "/workspace/repos/skintwin-ecosystem-design"]
-      .find((candidate) => existsSync(`${candidate}/domain/ledger.py`));
-  if (!hub) return;
-  process.env.SKINTWIN_HUB_ROOT ||= hub;
-  process.env.SKINTWIN_CHAIN_LEDGER ||= `${hub}/var/supply-chain.jsonl`;
-}
 
 export function acceptSupplyChainCommand(body: {
   command?: string;

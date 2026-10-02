@@ -34,6 +34,16 @@ function namedChargeId(value) {
   return named(value);
 }
 
+function namedCurrency(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function codeCurrency(value, fallback) {
+  const currency = (namedCurrency(value) || fallback).toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  return currency;
+}
+
 function metadataObject(value) {
   if (typeof value === "string") {
     try {
@@ -78,8 +88,7 @@ export function succeededPaymentIntentSettlement(intent) {
   const metadata = metadataObject(intent.metadata);
   const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const currency = String(intent.currency || "USD").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const currency = codeCurrency(intent.currency, "USD");
   const intentId = named(intent.id) || fulfillmentId;
   const settlementId =
     named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${intentId}`;
@@ -107,8 +116,7 @@ export function completedCheckoutSettlement(session) {
   const metadata = metadataObject(session.metadata);
   const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const currency = String(session.currency || "USD").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const currency = codeCurrency(session.currency, "USD");
   const sessionId = named(session.id) || fulfillmentId;
   const settlementId =
     named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${sessionId}`;
@@ -129,9 +137,7 @@ export function recordCheckoutSettlement(session) {
 }
 
 function invoiceCurrency(invoice) {
-  const currency = String(invoice.currency || "USD").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
-  return currency;
+  return codeCurrency(invoice.currency, "USD");
 }
 
 function invoiceLines(invoice) {
@@ -274,7 +280,11 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
     named(metadata.settlement_id) ||
     named(metadata.settlementId) ||
     `pay-${reference}`;
-  const currency = overrides.currency || data.currency || "NGN";
+  const currency =
+    namedCurrency(overrides.currency) ||
+    namedCurrency(data.currency) ||
+    namedCurrency(metadata.currency) ||
+    "NGN";
   if (overrides.amount != null) {
     return { settlementId, fulfillmentId, amount: overrides.amount, currency };
   }
@@ -293,7 +303,7 @@ export function settlementCommand(payment) {
       settlement_id: text(sale.settlementId, "settlement_id"),
       fulfillment_id: sale.fulfillmentId,
       amount_cents: amountCents(payment),
-      currency: text(payment.currency || "USD", "currency"),
+      currency: text(namedCurrency(payment.currency) || "USD", "currency"),
     },
   };
 }

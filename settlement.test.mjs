@@ -621,3 +621,148 @@ test("a verified Paystack charge named by a blank reference records the charge i
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a named sale with a blank currency records the next currency once", () => {
+  const preferred = verifiedPaystackSettlement(
+    {
+      status: "success",
+      amount: 18500,
+      currency: "  ",
+      reference: "ref-1",
+      metadata: { fulfillment_id: "order-9:0:sku-cleanser", currency: "NGN" },
+    },
+    { currency: "ZAR" },
+  );
+  assert.equal(preferred.currency, "ZAR");
+  const fallen = verifiedPaystackSettlement({
+    status: "success",
+    amount: 18500,
+    currency: "  ",
+    reference: "ref-zar",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser", currency: " zar " },
+  });
+  assert.equal(fallen.currency, "zar");
+  assert.equal(fallen.fulfillmentId, "order-9:0:sku-cleanser");
+  const defaulted = verifiedPaystackSettlement({
+    status: "success",
+    amount: 18500,
+    currency: "  ",
+    reference: "ref-ngn",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser", currency: "  " },
+  });
+  assert.equal(defaulted.currency, "NGN");
+  assert.equal(
+    verifiedPaystackSettlement({ status: "success", amount: 18500, currency: "  ", reference: "ref-1" }),
+    null,
+  );
+  const intent = succeededPaymentIntentSettlement({
+    id: "pi_blank",
+    amount: 18500,
+    currency: "  ",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(intent.currency, "USD");
+  assert.equal(intent.fulfillmentId, "order-9:0:sku-cleanser");
+  assert.equal(
+    succeededPaymentIntentSettlement({ id: "pi_plain", amount: 18500, currency: "  " }),
+    null,
+  );
+  assert.throws(
+    () =>
+      succeededPaymentIntentSettlement({
+        id: "pi_bad",
+        amount: 18500,
+        currency: "US",
+        metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+      }),
+    /currency must be a 3-letter code/,
+  );
+  const checkout = completedCheckoutSettlement({
+    id: "cs_blank",
+    amount_total: 18500,
+    currency: "  ",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(checkout.currency, "USD");
+  const invoice = paidInvoiceSettlement({
+    id: "in_blank",
+    amount_paid: 18500,
+    currency: "  ",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(invoice.currency, "USD");
+  assert.equal(
+    settlementCommand({
+      settlementId: "pay-blank",
+      fulfillmentId: "order-9:0:sku-cleanser",
+      amountCents: 18500,
+      currency: "  ",
+    }).args.currency,
+    "USD",
+  );
+  assert.equal(
+    settlementCommand({
+      settlementId: "pay-zar",
+      fulfillmentId: "order-9:0:sku-cleanser",
+      amountCents: 18500,
+      currency: " zar ",
+    }).args.currency,
+    "zar",
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-currency-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = recordSettlement(
+      verifiedPaystackSettlement({ status: "success", amount: 18500, currency: "  ", reference: "ref-1" }),
+    );
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const rejected = recordPaymentIntentSettlement({
+      id: "pi_bad",
+      amount: 18500,
+      currency: "US",
+      metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+    });
+    assert.equal(rejected.ok, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const paid = recordSettlement(fallen);
+    assert.equal(paid.ok, true);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /pay-ref-zar/);
+    assert.match(recorded, /"currency": "zar"/);
+    const again = recordSettlement(fallen);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

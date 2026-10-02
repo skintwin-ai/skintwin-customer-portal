@@ -196,6 +196,29 @@ export function acceptOrderSaleReturns(orderNumber, items, returnKey) {
   return commitAll(commands);
 }
 
+export function cancelledOrderReturnCommands(sale, orderNumber, items, returnKey) {
+  const namedId = typeof sale?.fulfillmentId === "string" ? sale.fulfillmentId : "";
+  const named = namedId
+    ? saleReturnCommands(sale.returnId || `return:${returnKey}:${namedId}`, namedId)
+    : [];
+  const rest = orderSaleReturns(orderNumber, items, returnKey).filter(
+    (command) => command.args.fulfillment_id !== namedId,
+  );
+  return [...named, ...rest];
+}
+
+export function acceptCancelledOrderReturns(sale, orderNumber, items, returnKey) {
+  let commands;
+  try {
+    commands = cancelledOrderReturnCommands(sale, orderNumber, items, returnKey);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 function chargeMetadata(charge, key) {
   const metadata = charge?.metadata;
   if (!metadata || typeof metadata !== "object") return "";

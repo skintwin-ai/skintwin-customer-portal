@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptBookingCancellation, acceptBookingDelivery, bookingCancellationCommands, acceptChargeReturn, acceptChargeStoredReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, chargeStoredSaleReturns, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, namedSale, orderSaleReturns, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptBookingCancellation, acceptBookingDelivery, bookingCancellationCommands, acceptCancelledOrderReturns, acceptChargeReturn, acceptChargeStoredReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, cancelledOrderReturnCommands, catalogProduct, chargeReturnCommands, chargeStoredSaleReturns, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, namedSale, orderSaleReturns, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -2980,6 +2980,27 @@ test("a cancelled order returns the sale stored on its product line once", () =>
   assert.deepEqual(orderSaleReturns("  ", lines, 4), []);
   assert.deepEqual(orderSaleReturns("order-9", [{ type: "service", name: "Facial" }], 4), []);
   assert.deepEqual(orderSaleReturns("order-9", [{ type: "product", name: "Cleanser" }], 4), []);
+  const splitLines = [
+    { id: 3, type: "product", sku: "sku-cleanser" },
+    { id: 1, type: "service", sku: "sku-facial" },
+    { id: 2, type: "product", sku: "sku-cleanser" },
+  ];
+  assert.deepEqual(
+    cancelledOrderReturnCommands({}, "order-9", lines, 4),
+    orderSaleReturns("order-9", lines, 4),
+  );
+  assert.deepEqual(
+    cancelledOrderReturnCommands(
+      { fulfillmentId: "order-21:2:sku-cleanser", returnId: "return-named" },
+      "order-21",
+      splitLines,
+      8,
+    ).map((command) => command.args),
+    [
+      { return_id: "return-named", fulfillment_id: "order-21:2:sku-cleanser" },
+      { return_id: "return:8:order-21:1:sku-cleanser", fulfillment_id: "order-21:1:sku-cleanser" },
+    ],
+  );
   const dir = mkdtempSync(join(tmpdir(), "portal-order-return-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const locate = loadChainLocate();
@@ -3023,6 +3044,59 @@ test("a cancelled order returns the sale stored on its product line once", () =>
     const again = acceptOrderSaleReturns("order-9", lines, 4);
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const split = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "fulfill", args: { fulfillment_id: "order-21:1:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 1000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-21:2:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 1000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-4:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 1000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(split.status, 0, split.stderr || split.stdout);
+    const returnedSplit = acceptCancelledOrderReturns(
+      { fulfillmentId: "order-21:2:sku-cleanser" },
+      "order-21",
+      splitLines,
+      8,
+    );
+    assert.equal(returnedSplit.ok, true, returnedSplit.error);
+    assert.equal(returnedSplit.count, 2);
+    const splitText = readFileSync(ledger, "utf8");
+    assert.match(splitText, /return:8:order-21:2:sku-cleanser/);
+    assert.match(splitText, /return:8:order-21:1:sku-cleanser/);
+    assert.doesNotMatch(splitText, /return:8:order-4:0:sku-cleanser/);
+    assert.doesNotMatch(splitText, /return:to-cape-town/);
+    const repeatedSplit = acceptCancelledOrderReturns(
+      { fulfillmentId: "order-21:2:sku-cleanser" },
+      "order-21",
+      splitLines,
+      8,
+    );
+    assert.equal(repeatedSplit.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), splitText);
+    const held = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "fulfill", args: { fulfillment_id: "order-22:1:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 1000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(held.status, 0, held.stderr || held.stdout);
+    const heldText = readFileSync(ledger, "utf8");
+    const rejected = acceptCancelledOrderReturns(
+      { fulfillmentId: "missing-order" },
+      "order-22",
+      [{ id: 2, type: "product", sku: "sku-cleanser" }, { id: 1, type: "service", name: "Facial" }],
+      9,
+    );
+    assert.equal(rejected.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), heldText);
+    assert.doesNotMatch(heldText, /return:9:order-22:1:sku-cleanser/);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

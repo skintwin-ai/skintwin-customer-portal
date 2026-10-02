@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingCancellation, acceptBookingDelivery, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordOrderSaleSettlements, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingCancellation, acceptBookingDelivery, acceptCancelledOrderReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordOrderSaleSettlements, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -557,16 +557,12 @@ const orderRouter = router({
     .mutation(async ({ input }) => {
       const sale = namedSale(input);
       if (input.status === "refunded" || input.status === "cancelled") {
-        const returned = sale.fulfillmentId
-          ? acceptSaleReturn(
-            sale.returnId || `return:${input.id}:${sale.fulfillmentId}`,
-            sale.fulfillmentId,
-          )
-          : acceptOrderSaleReturns(
-            (await db.getOrderById(input.id))?.orderNumber,
-            await db.getOrderItems(input.id),
-            input.id,
-          );
+        const returned = acceptCancelledOrderReturns(
+          sale,
+          (await db.getOrderById(input.id))?.orderNumber,
+          await db.getOrderItems(input.id),
+          input.id,
+        );
         if (!returned.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
         }

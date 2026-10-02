@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import type Stripe from "stripe";
 import * as db from "./db";
 import { constructWebhookEvent } from "./integrations/stripe";
-import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn } from "./supplyChain";
+import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn, acceptChargeStoredReturns } from "./supplyChain";
 
 export function createStripeWebhookRouter(): Router {
   const router = Router();
@@ -96,6 +96,17 @@ async function handleChargeRefunded(charge: Stripe.Charge) {
   const paymentIntent = charge.payment_intent;
   const processorId = typeof paymentIntent === "string" ? paymentIntent : paymentIntent?.id || charge.id;
   const payment = await db.getPaymentByProcessorId(processorId);
+  if (charge.refunded === true && returned.count === 0) {
+    const order = payment?.orderId ? await db.getOrderById(payment.orderId) : undefined;
+    const stored = acceptChargeStoredReturns(
+      charge,
+      order?.orderNumber,
+      order ? await db.getOrderItems(order.id) : [],
+    );
+    if (!stored.ok) {
+      throw new Error(stored.error);
+    }
+  }
   if (!payment) return;
   await db.updatePayment(payment.id, {
     status: charge.refunded ? "refunded" : "partially_refunded",

@@ -899,6 +899,7 @@ const bookingRouter = router({
     .input(z.object({
       id: z.number(),
       delivery: z.object({
+        sku: z.string().optional(),
         skuId: z.string().optional(),
         sku_id: z.string().optional(),
         batchId: z.string().optional(),

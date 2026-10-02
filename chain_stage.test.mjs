@@ -1278,6 +1278,91 @@ test("a delivery named by sku_id moves that batch once", () => {
   }
 });
 
+test("a delivery named by sku moves that batch once", () => {
+  const preferred = bookingDeliveryCommands(9, {
+    sku: "sku-serum-c",
+    skuId: "sku-other",
+    sku_id: "sku-cleanser",
+    batchId: "batch-serum",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: 2000,
+  });
+  assert.equal(preferred[0].args.sku_id, "sku-serum-c");
+  assert.equal(preferred[0].args.batch_id, "batch-serum");
+  const fallen = bookingDeliveryCommands(9, {
+    sku: "  ",
+    skuId: "sku-cleanser",
+    batch_id: "batch-cleanser",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: 2000,
+  });
+  assert.equal(fallen[0].args.sku_id, "sku-cleanser");
+  assert.equal(fallen[0].args.batch_id, "batch-cleanser");
+  const missing = acceptBookingDelivery(9, {
+    sku: "  ",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: 2000,
+  });
+  assert.equal(missing.ok, false);
+  const dir = mkdtempSync(join(tmpdir(), "portal-booking-sku-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const moved = acceptBookingDelivery("11", {
+      sku: "sku-cleanser",
+      batchId: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 2000,
+    });
+    assert.equal(moved.ok, true);
+    assert.equal(moved.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /booking:11/);
+    assert.match(recorded, /sku-cleanser/);
+    const again = acceptBookingDelivery("11", {
+      sku: "  ",
+      skuId: "sku-cleanser",
+      batch_id: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 4000,
+    });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a completed booking moves the named delivery once", () => {
   const commands = bookingDeliveryCommands(4, {
     skuId: "sku-cleanser",

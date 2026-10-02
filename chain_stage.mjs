@@ -590,7 +590,7 @@ export function bookingDeliveryCommands(bookingId, delivery) {
       command: "transfer",
       args: {
         transfer_id: `booking:${id}`,
-        sku_id: text(namedField(delivery, "skuId", "sku_id"), "sku_id"),
+        sku_id: text(namedField(delivery, "sku", "skuId", "sku_id"), "sku_id"),
         batch_id: text(namedField(delivery, "batchId", "batch_id"), "batch_id"),
         source,
         destination,

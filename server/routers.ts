@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptSupplyChainCommand } from "./supplyChain";
+import { acceptOrderFulfillments, acceptSupplyChainCommand } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -491,16 +491,26 @@ const orderRouter = router({
         unitPrice: z.string(),
         total: z.string(),
         type: z.enum(['product', 'treatment', 'service']).default('product'),
+        location: z.string().optional(),
+        milligrams: z.number().int().positive().optional(),
+        practitionerId: z.string().optional(),
       })),
     }))
     .mutation(async ({ input }) => {
       const { items, ...orderData } = input;
+      const drawn = acceptOrderFulfillments(input.orderNumber, items, input.therapistId);
+      if (!drawn.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+      }
       const orderId = await db.createOrder(orderData);
       
-      const orderItems = items.map(item => ({
-        orderId,
-        ...item,
-      }));
+      const orderItems = items.map(item => {
+        const { location: _location, milligrams: _milligrams, practitionerId: _practitionerId, ...stored } = item;
+        return {
+          orderId,
+          ...stored,
+        };
+      });
       await db.createOrderItems(orderItems);
       
       return { id: orderId };

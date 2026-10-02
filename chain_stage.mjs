@@ -42,6 +42,36 @@ export function fulfill(args) {
   };
 }
 
+export function fulfillmentCommands(orderNumber, items, therapistId) {
+  const orderId = text(orderNumber, "order number");
+  if (!Array.isArray(items)) throw new Error("order items are required");
+  const commands = [];
+  items.forEach((item, index) => {
+    const type = item?.type || "product";
+    if (type === "service" || !item?.sku) return;
+    if (type !== "product" && type !== "treatment") {
+      throw new Error(`unknown item type ${type}`);
+    }
+    if (typeof item.location !== "string" || !Number.isInteger(item.milligrams)) {
+      throw new Error(`sku ${item.sku} requires location and milligrams`);
+    }
+    const kind = type === "treatment" ? "treatment" : "retail";
+    const practitioner =
+      item.practitionerId || (therapistId == null ? undefined : String(therapistId));
+    const args = {
+      fulfillment_id: `${orderId}:${index}:${item.sku}`,
+      sku_id: item.sku,
+      location: item.location,
+      milligrams: item.milligrams,
+      kind,
+      practitioner_id: kind === "treatment" ? practitioner : null,
+    };
+    fulfill(args);
+    commands.push({ command: "fulfill", args });
+  });
+  return commands;
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

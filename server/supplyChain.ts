@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { handleStage } from "../chain_stage.mjs";
+import { fulfillmentCommands, handleStage } from "../chain_stage.mjs";
 
 function useSharedLedger() {
   const hub = process.env.SKINTWIN_HUB_ROOT
@@ -16,4 +16,22 @@ export function acceptSupplyChainCommand(body: {
 }) {
   useSharedLedger();
   return handleStage(body);
+}
+
+export function acceptOrderFulfillments(
+  orderNumber: string,
+  items: unknown[],
+  therapistId?: number | string | null,
+) {
+  let commands;
+  try {
+    commands = fulfillmentCommands(orderNumber, items, therapistId);
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : "order rejected" };
+  }
+  for (const command of commands) {
+    const accepted = acceptSupplyChainCommand(command);
+    if (!accepted.ok) return accepted;
+  }
+  return { ok: true as const, count: commands.length };
 }

@@ -249,9 +249,18 @@ function chargeFulfillmentId(charge) {
   }
   const settlementId = chargeSettlementId(charge);
   if (settlementId) return settledFulfillment(settlementId);
+  const invoiceId = chargeInvoiceId(charge);
+  if (invoiceId) return settledFulfillment(`pay-${invoiceId}`);
   const intentId = paymentIntentId(charge);
   if (!intentId) return "";
   return settledFulfillment(`pay-${intentId}`);
+}
+
+function chargeInvoiceId(charge) {
+  const invoice = charge?.invoice;
+  if (typeof invoice === "string") return invoice.trim();
+  if (!invoice || typeof invoice !== "object" || Array.isArray(invoice)) return "";
+  return typeof invoice.id === "string" ? invoice.id.trim() : "";
 }
 
 export function chargeReturnCommands(charge) {
@@ -279,7 +288,7 @@ export function acceptChargeReturn(charge) {
 export function chargeStoredSaleReturns(charge, orderNumber, items) {
   if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
   const fulfillmentId = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
-  if (fulfillmentId || chargeSettlementId(charge)) return [];
+  if (fulfillmentId || chargeSettlementId(charge) || chargeInvoiceId(charge)) return [];
   const chargeId = charge.id == null || String(charge.id).trim() === "" ? "" : String(charge.id).trim();
   return orderSaleReturns(orderNumber, items, chargeId);
 }

@@ -1871,6 +1871,14 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_miss", payment_intent: "pi_missing" }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
+  assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_inv", invoice: "in_1" }), []);
+  assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_inv", invoice: { id: "in_1" } }), []);
+  assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_1", metadata, invoice: "in_1" }), [
+    {
+      command: "return_sale",
+      args: { return_id: `return:ch_1:${fulfillmentId}`, fulfillment_id: fulfillmentId },
+    },
+  ]);
   assert.deepEqual(chargeReturnCommands({
     refunded: true,
     id: "ch_1",
@@ -1903,17 +1911,19 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
         commands: [
           { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
           { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
-          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 8000 } },
-          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 10000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 10000]] } },
           { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
-          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 8000]] } },
-          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 8000 } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 10000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 10000 } },
           { command: "fulfill", args: { fulfillment_id: fulfillmentId, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: intentFulfillment, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-pi_1", fulfillment_id: "order-settled:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
           { command: "fulfill", args: { fulfillment_id: "order-named:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-snake", fulfillment_id: "order-named:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-invoice:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_1", fulfillment_id: "order-invoice:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
         ],
       }),
       encoding: "utf8",
@@ -1980,6 +1990,33 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     });
     assert.equal(namedAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), namedText);
+    const absentInvoice = acceptChargeReturn({
+      refunded: true,
+      id: "ch_no_invoice",
+      invoice: "in_missing",
+      payment_intent: "pi_1",
+    });
+    assert.equal(absentInvoice.ok, true);
+    assert.equal(absentInvoice.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), namedText);
+    const fromInvoice = acceptChargeReturn({
+      refunded: true,
+      id: "ch_invoice",
+      invoice: "in_1",
+      payment_intent: "pi_other",
+    });
+    assert.equal(fromInvoice.ok, true, fromInvoice.error);
+    assert.equal(fromInvoice.count, 1);
+    const invoiceText = readFileSync(ledger, "utf8");
+    assert.match(invoiceText, /return:ch_invoice:order-invoice:0:sku-cleanser/);
+    assert.doesNotMatch(invoiceText, /return:to-cape-town/);
+    const invoiceAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_invoice",
+      invoice: { id: "in_1" },
+    });
+    assert.equal(invoiceAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), invoiceText);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
@@ -2543,6 +2580,11 @@ test("a refunded charge returns the sale stored on its order once", () => {
       "order-9",
       lines,
     ),
+    [],
+  );
+  assert.deepEqual(chargeStoredSaleReturns({ refunded: true, id: "ch_1", invoice: "in_1" }, "order-9", lines), []);
+  assert.deepEqual(
+    chargeStoredSaleReturns({ refunded: true, id: "ch_1", invoice: { id: "in_1" } }, "order-9", lines),
     [],
   );
   assert.deepEqual(chargeStoredSaleReturns(charge, "order-9", [{ type: "service", name: "Facial" }]), []);

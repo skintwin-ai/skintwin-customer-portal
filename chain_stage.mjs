@@ -148,6 +148,31 @@ export function acceptOrderFulfillments(orderNumber, items, therapistId) {
   return commitAll(commands);
 }
 
+export function treatmentProductCommands(reference, productsUsed, practitionerId) {
+  if (productsUsed == null) return [];
+  if (!Array.isArray(productsUsed)) throw new Error("productsUsed must be a list");
+  const chainItems = productsUsed.filter((item) => item && item.sku);
+  if (chainItems.length === 0) return [];
+  text(reference, "treatment reference");
+  return fulfillmentCommands(
+    reference,
+    chainItems.map((item) => ({ ...item, type: "treatment" })),
+    practitionerId,
+  );
+}
+
+export function acceptTreatmentProducts(reference, productsUsed, practitionerId) {
+  let commands;
+  try {
+    commands = treatmentProductCommands(reference, productsUsed, practitionerId);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

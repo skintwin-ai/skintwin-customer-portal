@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptOrderFulfillments, fulfillmentCommands, handleStage, loadChainLocate } from "./chain_stage.mjs";
+import { acceptOrderFulfillments, acceptTreatmentProducts, fulfillmentCommands, handleStage, loadChainLocate, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -108,4 +108,46 @@ test("treatment fulfillment requires a practitioner", () => {
     },
   });
   assert.equal(result.ok, false);
+});
+
+test("a treatment product list without a sku does not draw stock", () => {
+  const commands = treatmentProductCommands("tx-1", [{ productId: 4, quantity: 1 }]);
+  assert.equal(commands.length, 0);
+  const skipped = acceptTreatmentProducts(undefined, [{ productId: 4, quantity: 1 }]);
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.count, 0);
+});
+
+test("a treatment product with a sku is a treatment fulfillment", () => {
+  const commands = treatmentProductCommands(
+    "tx-aya",
+    [{ sku: "sku-serum-c", location: "cape-town", milligrams: 2000 }],
+    "aya",
+  );
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args.kind, "treatment");
+  assert.equal(commands[0].args.practitioner_id, "aya");
+  assert.equal(commands[0].args.fulfillment_id, "tx-aya:0:sku-serum-c");
+  const missing = acceptTreatmentProducts(undefined, [{ sku: "sku-serum-c", location: "cape-town", milligrams: 2000 }], "aya");
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /treatment reference/);
+});
+
+test("treatment products against an empty ledger are rejected", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-treatment-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  try {
+    const result = acceptTreatmentProducts(
+      "tx-empty",
+      [{ sku: "sku-serum-c", location: "cape-town", milligrams: 2000 }],
+      "aya",
+    );
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(ledger) && readFileSync(ledger, "utf8").includes("tx-empty"), false);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+  }
 });

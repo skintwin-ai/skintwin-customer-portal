@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand, catalogProduct, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -343,10 +343,16 @@ const treatmentRouter = router({
       notes: z.string().optional(),
       price: z.string(),
       duration: z.number().optional(),
+      reference: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const { reference, ...treatment } = input;
+      const drawn = acceptTreatmentProducts(reference, treatment.productsUsed, String(ctx.therapist.id));
+      if (!drawn.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+      }
       const id = await db.createTreatment({
-        ...input,
+        ...treatment,
         therapistId: ctx.therapist.id,
       });
       return { id };
@@ -360,9 +366,16 @@ const treatmentRouter = router({
       productsUsed: z.any().optional(),
       notes: z.string().optional(),
       price: z.string().optional(),
+      reference: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      const { id, ...data } = input;
+    .mutation(async ({ ctx, input }) => {
+      const { id, reference, ...data } = input;
+      if (data.productsUsed !== undefined) {
+        const drawn = acceptTreatmentProducts(reference, data.productsUsed, String(ctx.therapist.id));
+        if (!drawn.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+        }
+      }
       await db.updateTreatment(id, data);
       return { success: true };
     }),

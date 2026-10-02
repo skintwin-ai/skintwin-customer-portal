@@ -334,6 +334,42 @@ export function acceptPurchaseReceipt(poNumber, receipts) {
   return commitAll(commands);
 }
 
+export function bookingDeliveryCommands(bookingId, delivery) {
+  if (delivery == null) return [];
+  if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)) {
+    throw new Error("delivery is required");
+  }
+  const id = text(String(bookingId), "booking id");
+  const source = text(delivery.source, "source");
+  const destination = text(delivery.destination, "destination");
+  if (source === destination) throw new Error("transfer source and destination must differ");
+  return [
+    {
+      command: "transfer",
+      args: {
+        transfer_id: `booking:${id}`,
+        sku_id: text(delivery.skuId ?? delivery.sku_id, "sku_id"),
+        batch_id: text(delivery.batchId ?? delivery.batch_id, "batch_id"),
+        source,
+        destination,
+        milligrams: positive(delivery.milligrams, "milligrams"),
+      },
+    },
+  ];
+}
+
+export function acceptBookingDelivery(bookingId, delivery) {
+  let commands;
+  try {
+    commands = bookingDeliveryCommands(bookingId, delivery);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

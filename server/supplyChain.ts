@@ -1,8 +1,8 @@
-import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, catalogProduct, handleStage, useSharedLedger } from "../chain_stage.mjs";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, catalogProduct, handleStage, useSharedLedger } from "../chain_stage.mjs";
 import { recordSkinOutcome } from "../outcome.mjs";
 import { recordSettlement } from "../settlement.mjs";
 
-export { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome };
+export { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome };
 
 export function acceptSupplyChainCommand(body: {
   command?: string;

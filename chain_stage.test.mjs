@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, purchaseReceiptCommands, shopifyCatalogCommands, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, purchaseReceiptCommands, shopifyCatalogCommands, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -337,6 +337,95 @@ test("a supplier named for an ingredient is qualified once", () => {
     const recorded = readFileSync(ledger, "utf8");
     assert.match(recorded, /qual:glycerin:Inland Humectants/);
     const again = acceptSupplierQualification({ name: "Inland Humectants", ingredientId: "glycerin" });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("a completed booking without a delivery does not move stock", () => {
+  assert.equal(bookingDeliveryCommands(4, null).length, 0);
+  const skipped = acceptBookingDelivery(4, null);
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.count, 0);
+  assert.throws(
+    () => bookingDeliveryCommands(4, {
+      skuId: "sku-cleanser",
+      batchId: "batch-cleanser",
+      source: "plant",
+      destination: "plant",
+      milligrams: 2000,
+    }),
+    /must differ/,
+  );
+});
+
+test("a completed booking moves the named delivery once", () => {
+  const commands = bookingDeliveryCommands(4, {
+    skuId: "sku-cleanser",
+    batchId: "batch-cleanser",
+    source: "plant",
+    destination: "cape-town",
+    milligrams: 2000,
+  });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args.transfer_id, "booking:4");
+  const dir = mkdtempSync(join(tmpdir(), "portal-booking-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const empty = acceptBookingDelivery("9", {
+      skuId: "sku-cleanser",
+      batchId: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 2000,
+    });
+    assert.equal(empty.ok, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const moved = acceptBookingDelivery("9", {
+      skuId: "sku-cleanser",
+      batchId: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 2000,
+    });
+    assert.equal(moved.ok, true);
+    assert.equal(moved.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /booking:9/);
+    const again = acceptBookingDelivery("9", {
+      skuId: "sku-cleanser",
+      batchId: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 4000,
+    });
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
   } finally {

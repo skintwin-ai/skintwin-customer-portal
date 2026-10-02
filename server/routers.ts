@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -840,8 +840,23 @@ const bookingRouter = router({
     }),
   
   complete: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({
+      id: z.number(),
+      delivery: z.object({
+        skuId: z.string(),
+        batchId: z.string(),
+        source: z.string(),
+        destination: z.string(),
+        milligrams: z.number().int().positive(),
+      }).optional(),
+    }))
     .mutation(async ({ input }) => {
+      if (input.delivery) {
+        const moved = acceptBookingDelivery(String(input.id), input.delivery);
+        if (!moved.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: moved.error });
+        }
+      }
       await db.updateBooking(input.id, { status: 'completed' });
       return { success: true };
     }),

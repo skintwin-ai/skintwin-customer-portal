@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Catalog and fulfillment commands for the customer portal API and the hub ledger.
 
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 function text(value, label) {
@@ -45,12 +46,37 @@ export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};
   try {
-    if (command === "catalog_sku") return { ok: true, artifact: catalogSku(args) };
-    if (command === "fulfill") return { ok: true, artifact: fulfill(args) };
+    if (command === "catalog_sku") return commitStage(request, { ok: true, artifact: catalogSku(args) });
+    if (command === "fulfill") return commitStage(request, { ok: true, artifact: fulfill(args) });
     return { ok: false, error: `unknown command ${command}` };
   } catch (error) {
     return { ok: false, error: error.message };
   }
+}
+
+function commitStage(request, result) {
+  if (!result.ok || process.env.SKINTWIN_CHAIN_SKIP_DISPATCH === "1") return result;
+  const ledger = process.env.SKINTWIN_CHAIN_LEDGER;
+  if (!ledger) return result;
+  const hub = process.env.SKINTWIN_HUB_ROOT
+    || ["/agent/repos/skintwin-ecosystem-design", "/workspace/repos/skintwin-ecosystem-design"]
+      .find((candidate) => existsSync(`${candidate}/domain/ledger.py`));
+  if (!hub) return { ok: false, error: "supply-chain hub is not present" };
+  const child = spawnSync("python3", ["-m", "domain.ledger"], {
+    cwd: hub,
+    input: JSON.stringify(request),
+    encoding: "utf8",
+  });
+  if (child.status !== 0) {
+    let message = child.stderr;
+    try {
+      message = JSON.parse(child.stdout || "{}").error || message;
+    } catch {
+      message = message || "ledger rejected the command";
+    }
+    return { ok: false, error: message || "ledger rejected the command" };
+  }
+  return result;
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

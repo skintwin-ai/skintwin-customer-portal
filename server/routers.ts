@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptShopifyCatalog, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -985,9 +985,27 @@ const purchaseOrderRouter = router({
   updateStatus: adminProcedure
     .input(z.object({
       id: z.number(),
+      poNumber: z.string().optional(),
       status: z.enum(['draft', 'submitted', 'approved', 'received', 'cancelled']),
+      receipts: z.array(z.object({
+        ingredientId: z.string().optional(),
+        qualificationId: z.string().optional(),
+        lotId: z.string().optional(),
+        milligrams: z.number().int().positive().optional(),
+        quantityKg: z.number().positive().optional(),
+        componentId: z.string().optional(),
+        name: z.string().optional(),
+        supplierName: z.string().optional(),
+        pieces: z.number().int().positive().optional(),
+      })).optional(),
     }))
     .mutation(async ({ input }) => {
+      if (input.status === "received" && input.receipts) {
+        const accepted = acceptPurchaseReceipt(input.poNumber || String(input.id), input.receipts);
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+      }
       await db.updatePurchaseOrder(input.id, { status: input.status });
       return { success: true };
     }),

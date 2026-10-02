@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptOrderFulfillments, acceptShopifyCatalog, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, shopifyCatalogCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, purchaseReceiptCommands, shopifyCatalogCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -211,5 +211,91 @@ test("a shopify catalog batch leaves nothing when a formula is unknown", () => {
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
     if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("a received purchase order records materials and packaging", () => {
+  const commands = purchaseReceiptCommands("PO-14", [
+    { name: "Retail serum", productId: 3, quantity: 2 },
+    { ingredientId: "glycerin", qualificationId: "qual-glycerin", quantityKg: 0.02 },
+    { componentId: "tube-cleanser", name: "Cleanser tube", supplierName: "Joburg Tubes", pieces: 3 },
+  ]);
+  assert.equal(commands.length, 2);
+  assert.equal(commands[0].command, "receive_lot");
+  assert.equal(commands[0].args.lot_id, "PO-14:1:glycerin");
+  assert.equal(commands[0].args.milligrams, 20000);
+  assert.equal(commands[1].command, "receive_package");
+  assert.equal(commands[1].args.lot_id, "PO-14:2:tube-cleanser");
+  assert.equal(commands[1].args.pieces, 3);
+  assert.equal(commands[1].args.supplier_name, "Joburg Tubes");
+});
+
+test("an ingredient receipt without a quantity is rejected", () => {
+  assert.throws(
+    () => purchaseReceiptCommands("PO-14", [{ ingredientId: "glycerin", qualificationId: "qual-glycerin" }]),
+    /milligrams/,
+  );
+});
+
+test("a qualified ingredient receipt is appended once", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-receipt-ok-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stdout + seeded.stderr);
+    const result = acceptPurchaseReceipt("PO-14", [
+      { ingredientId: "glycerin", qualificationId: "qual-glycerin", milligrams: 20000 },
+      { ingredientId: "glycerin" },
+    ]);
+    assert.equal(result.ok, false);
+    assert.equal(readFileSync(ledger, "utf8").includes("PO-14"), false);
+    const received = acceptPurchaseReceipt("PO-14", [
+      { ingredientId: "glycerin", qualificationId: "qual-glycerin", milligrams: 20000 },
+    ]);
+    assert.equal(received.ok, true);
+    assert.equal(received.count, 1);
+    assert.match(readFileSync(ledger, "utf8"), /PO-14:0:glycerin/);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("a received purchase order against an empty ledger writes nothing", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-receipt-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  try {
+    const finished = acceptPurchaseReceipt("PO-14", [{ name: "Retail serum" }]);
+    assert.equal(finished.ok, true);
+    assert.equal(finished.count, 0);
+    assert.equal(existsSync(ledger), false);
+    const result = acceptPurchaseReceipt("PO-14", [
+      { ingredientId: "glycerin", qualificationId: "qual-glycerin", milligrams: 20000 },
+    ]);
+    assert.equal(result.ok, false);
+    assert.equal(existsSync(ledger), false);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
   }
 });

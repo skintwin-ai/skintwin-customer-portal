@@ -225,6 +225,82 @@ export function acceptTreatmentProducts(reference, productsUsed, practitionerId)
   return commitAll(commands);
 }
 
+function named(item, snake, camel) {
+  const value = item?.[snake] ?? item?.[camel];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function kilogramsToMilligrams(value) {
+  const milligrams = Math.round(Number(value) * 1_000_000);
+  if (!Number.isInteger(milligrams) || milligrams < 1) {
+    throw new Error("milligrams must be a positive integer");
+  }
+  return milligrams;
+}
+
+export function purchaseReceiptCommands(poNumber, receipts) {
+  const poId = text(poNumber, "purchase order");
+  if (!Array.isArray(receipts)) throw new Error("receipts are required");
+  const commands = [];
+  receipts.forEach((item, index) => {
+    if (!item || typeof item !== "object") throw new Error("receipt line is required");
+    const ingredientId = named(item, "ingredient_id", "ingredientId");
+    const componentId = named(item, "component_id", "componentId");
+    if (!ingredientId && !componentId) return;
+    if (ingredientId && componentId) {
+      throw new Error(`receipt ${index} names both an ingredient and a package`);
+    }
+    const lotId = named(item, "lot_id", "lotId") || `${poId}:${index}:${ingredientId || componentId}`;
+    if (componentId) {
+      const pieces = item.pieces;
+      if (typeof pieces !== "number" || !Number.isInteger(pieces) || pieces < 1) {
+        throw new Error("pieces must be a positive integer");
+      }
+      commands.push({
+        command: "receive_package",
+        args: {
+          component_id: componentId,
+          name: text(item.name || componentId, "package name"),
+          lot_id: text(lotId, "lot_id"),
+          supplier_name: text(named(item, "supplier_name", "supplierName"), "supplier_name"),
+          pieces,
+        },
+      });
+      return;
+    }
+    let milligrams = item.milligrams;
+    if (milligrams == null) {
+      const kilograms = item.quantity_kg ?? item.quantityKg;
+      if (kilograms == null) throw new Error("milligrams must be a positive integer");
+      milligrams = kilogramsToMilligrams(kilograms);
+    } else if (typeof milligrams !== "number" || !Number.isInteger(milligrams) || milligrams < 1) {
+      throw new Error("milligrams must be a positive integer");
+    }
+    commands.push({
+      command: "receive_lot",
+      args: {
+        lot_id: text(lotId, "lot_id"),
+        ingredient_id: ingredientId,
+        qualification_id: text(named(item, "qualification_id", "qualificationId"), "qualification_id"),
+        milligrams,
+      },
+    });
+  });
+  return commands;
+}
+
+export function acceptPurchaseReceipt(poNumber, receipts) {
+  let commands;
+  try {
+    commands = purchaseReceiptCommands(poNumber, receipts);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

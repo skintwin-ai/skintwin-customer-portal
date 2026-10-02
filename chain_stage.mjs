@@ -296,6 +296,119 @@ export function acceptChargeStoredReturns(charge, orderNumber, items) {
   return commitAll(commands);
 }
 
+function invoiceLines(invoice) {
+  const lines = invoice?.lines;
+  if (lines && typeof lines === "object" && Array.isArray(lines.data)) return lines.data;
+  if (Array.isArray(lines)) return lines;
+  return [];
+}
+
+function invoiceMetadata(invoice, key) {
+  const metadata = invoice?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function nestedInvoiceMetadata(record, key) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return "";
+  const metadata = record.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+  const value = metadata[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function invoiceLineFulfillmentId(line) {
+  if (!line || typeof line !== "object") return "";
+  const direct = typeof line.fulfillment_id === "string" ? line.fulfillment_id.trim() : "";
+  if (direct) return direct;
+  const camel = typeof line.fulfillmentId === "string" ? line.fulfillmentId.trim() : "";
+  if (camel) return camel;
+  return (
+    nestedInvoiceMetadata(line, "fulfillment_id") ||
+    nestedInvoiceMetadata(line, "fulfillmentId") ||
+    nestedInvoiceMetadata(line.price, "fulfillment_id") ||
+    nestedInvoiceMetadata(line.price, "fulfillmentId") ||
+    nestedInvoiceMetadata(line.plan, "fulfillment_id") ||
+    nestedInvoiceMetadata(line.plan, "fulfillmentId")
+  );
+}
+
+function voidedInvoiceFulfillments(invoice) {
+  const stated = invoiceMetadata(invoice, "fulfillment_id") || invoiceMetadata(invoice, "fulfillmentId");
+  if (stated) return [stated];
+  const found = [];
+  for (const line of invoiceLines(invoice)) {
+    const fulfillmentId = invoiceLineFulfillmentId(line);
+    if (fulfillmentId && !found.includes(fulfillmentId)) found.push(fulfillmentId);
+  }
+  return found;
+}
+
+function recordedInvoiceFulfillments(invoiceId) {
+  const exact = `pay-${invoiceId}`;
+  const prefix = `${exact}:`;
+  const raw = process.env.SKINTWIN_CHAIN_LEDGER;
+  if (!raw || !existsSync(raw)) return [];
+  const bySettlement = new Map();
+  for (const line of readFileSync(raw, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.command !== "settle") continue;
+    const args = record.args || {};
+    const settlementId = args.settlement_id;
+    if (typeof settlementId !== "string" || (settlementId !== exact && !settlementId.startsWith(prefix))) continue;
+    const fulfillmentId = args.fulfillment_id;
+    if (typeof fulfillmentId !== "string" || !fulfillmentId) continue;
+    if (!bySettlement.has(settlementId)) bySettlement.set(settlementId, fulfillmentId);
+    else if (bySettlement.get(settlementId) !== fulfillmentId) bySettlement.set(settlementId, "");
+  }
+  const fulfillments = [];
+  for (const fulfillmentId of bySettlement.values()) {
+    if (fulfillmentId && !fulfillments.includes(fulfillmentId)) fulfillments.push(fulfillmentId);
+  }
+  return fulfillments;
+}
+
+function invoiceKey(invoice) {
+  const value = invoice?.id;
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+export function voidedInvoiceReturnCommands(invoice) {
+  if (!invoice || typeof invoice !== "object" || invoice.status !== "void") return [];
+  let fulfillments = voidedInvoiceFulfillments(invoice);
+  if (fulfillments.length === 0) {
+    const settlementId = invoiceMetadata(invoice, "settlement_id") || invoiceMetadata(invoice, "settlementId");
+    if (settlementId) {
+      const found = settledFulfillment(settlementId);
+      if (!found) return [];
+      fulfillments = [found];
+    } else {
+      const invoiceId = invoiceKey(invoice);
+      if (!invoiceId) return [];
+      fulfillments = recordedInvoiceFulfillments(invoiceId);
+    }
+  }
+  if (fulfillments.length === 0) return [];
+  const key = text(invoiceKey(invoice), "invoice");
+  return fulfillments.flatMap((fulfillmentId) => saleReturnCommands(`return:${key}:${fulfillmentId}`, fulfillmentId));
+}
+
+export function acceptVoidedInvoiceReturn(invoice) {
+  let commands;
+  try {
+    commands = voidedInvoiceReturnCommands(invoice);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function fulfill(args) {
   const kind = text(args.kind, "kind");
   if (kind !== "retail" && kind !== "treatment") {

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadChainLocate } from "./chain_stage.mjs";
+import { acceptVoidedInvoiceReturn, loadChainLocate, voidedInvoiceReturnCommands } from "./chain_stage.mjs";
 import { completedCheckoutSettlement, orderSaleSettlements, paidInvoiceLineSettlements, paidInvoiceSettlement, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordCheckoutSettlement, recordInvoiceSettlement, recordOrderSaleSettlements, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
 
 test("a payment without a fulfillment is not a settlement", () => {
@@ -206,6 +206,20 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
   assert.equal(command.args.fulfillment_id, "order-9:0:sku-cleanser");
   assert.equal(command.args.amount_cents, 18500);
   assert.equal(command.args.currency, "ZAR");
+  assert.deepEqual(voidedInvoiceReturnCommands({ id: "in_1", status: "paid", metadata: { fulfillment_id: "order-9:0:sku-cleanser" } }), []);
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_1",
+      status: "void",
+      metadata: { fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-snake" },
+    }),
+    [
+      {
+        command: "return_sale",
+        args: { return_id: "return:in_1:order-9:0:sku-cleanser", fulfillment_id: "order-9:0:sku-cleanser" },
+      },
+    ],
+  );
   const dir = mkdtempSync(join(tmpdir(), "portal-invoice-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const locate = loadChainLocate();
@@ -263,6 +277,33 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
     });
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const open = acceptVoidedInvoiceReturn({ id: "in_1", status: "paid" });
+    assert.equal(open.ok, true);
+    assert.equal(open.count, 0);
+    const missingReturn = acceptVoidedInvoiceReturn({
+      id: "in_missing",
+      status: "void",
+      metadata: { fulfillment_id: "missing-order" },
+    });
+    assert.equal(missingReturn.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const absent = acceptVoidedInvoiceReturn({
+      id: "in_1",
+      status: "void",
+      metadata: { settlement_id: "pay-absent" },
+    });
+    assert.equal(absent.ok, true);
+    assert.equal(absent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const returned = acceptVoidedInvoiceReturn({ id: "in_1", status: "void" });
+    assert.equal(returned.ok, true, returned.error);
+    assert.equal(returned.count, 1);
+    const voided = readFileSync(ledger, "utf8");
+    assert.match(voided, /return:in_1:order-9:0:sku-cleanser/);
+    assert.equal(voided.includes("return:to-cape-town"), false);
+    const voidAgain = acceptVoidedInvoiceReturn({ id: "in_1", status: "void" });
+    assert.equal(voidAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), voided);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
@@ -397,6 +438,16 @@ test("a paid invoice settles each line that names a fulfillment", () => {
     });
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const returned = acceptVoidedInvoiceReturn({ id: "in_two", status: "void" });
+    assert.equal(returned.ok, true, returned.error);
+    assert.equal(returned.count, 2);
+    const voided = readFileSync(ledger, "utf8");
+    assert.match(voided, /return:in_two:order-9:0:sku-cleanser/);
+    assert.match(voided, /return:in_two:order-9:1:sku-cleanser/);
+    assert.equal(voided.includes("return:to-cape-town"), false);
+    const voidAgain = acceptVoidedInvoiceReturn({ id: "in_two", status: "void" });
+    assert.equal(voidAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), voided);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import type Stripe from "stripe";
 import * as db from "./db";
 import { constructWebhookEvent } from "./integrations/stripe";
-import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn, acceptChargeStoredReturns, paymentForSettlement, recordOrderSaleSettlements } from "./supplyChain";
+import { recordPaymentIntentSettlement, recordInvoiceSettlement, recordCheckoutSettlement, acceptChargeReturn, acceptChargeStoredReturns, acceptVoidedInvoiceReturn, paymentForSettlement, recordOrderSaleSettlements } from "./supplyChain";
 
 export function createStripeWebhookRouter(): Router {
   const router = Router();
@@ -37,6 +37,8 @@ export function createStripeWebhookRouter(): Router {
           await handleChargeRefunded(event.data.object as Stripe.Charge);
         } else if (event.type === "invoice.paid") {
           await handleInvoicePaid(event.data.object as Stripe.Invoice);
+        } else if (event.type === "invoice.voided") {
+          await handleInvoiceVoided(event.data.object as Stripe.Invoice);
         } else if (event.type === "checkout.session.completed") {
           await handleCheckoutSessionCompleted(event.data.object as Stripe.Checkout.Session);
         }
@@ -89,6 +91,13 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   const settled = recordInvoiceSettlement(invoice);
   if (!settled.ok) {
     throw new Error(settled.error);
+  }
+}
+
+async function handleInvoiceVoided(invoice: Stripe.Invoice) {
+  const returned = acceptVoidedInvoiceReturn({ ...invoice, status: "void" });
+  if (!returned.ok) {
+    throw new Error(returned.error);
   }
 }
 

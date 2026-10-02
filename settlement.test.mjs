@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptVoidedInvoiceReturn, loadChainLocate, voidedInvoiceReturnCommands } from "./chain_stage.mjs";
+import { acceptChargeReturn, acceptVoidedInvoiceReturn, loadChainLocate, voidedInvoiceReturnCommands } from "./chain_stage.mjs";
 import { completedCheckoutSettlement, orderSaleSettlements, paidInvoiceLineSettlements, paidInvoiceSettlement, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordCheckoutSettlement, recordInvoiceSettlement, recordOrderSaleSettlements, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
 
 test("a payment without a fulfillment is not a settlement", () => {
@@ -128,6 +128,22 @@ test("a completed checkout settles the fulfillment named in its metadata", () =>
   assert.equal(command.args.fulfillment_id, "order-9:0:sku-cleanser");
   assert.equal(command.args.amount_cents, 18500);
   assert.equal(command.args.currency, "ZAR");
+  const fromIntent = completedCheckoutSettlement({
+    id: "cs_1",
+    amount_total: 18500,
+    currency: "zar",
+    payment_intent: "pi_cs",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(settlementCommand(fromIntent).args.settlement_id, "pay-pi_cs");
+  const namedIntent = completedCheckoutSettlement({
+    id: "cs_1",
+    amount_total: 18500,
+    currency: "zar",
+    payment_intent: { id: "pi_cs" },
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-cs_named" },
+  });
+  assert.equal(settlementCommand(namedIntent).args.settlement_id, "pay-cs_named");
   const dir = mkdtempSync(join(tmpdir(), "portal-checkout-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const locate = loadChainLocate();
@@ -162,6 +178,7 @@ test("a completed checkout settles the fulfillment named in its metadata", () =>
           { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
           { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
           { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-cs:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
         ],
       }),
       encoding: "utf8",
@@ -185,6 +202,48 @@ test("a completed checkout settles the fulfillment named in its metadata", () =>
     });
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
+    const intentPaid = recordCheckoutSettlement({
+      id: "cs_intent",
+      amount_total: 18500,
+      currency: "zar",
+      payment_intent: { id: "pi_cs" },
+      metadata: { fulfillment_id: "order-cs:0:sku-cleanser" },
+    });
+    assert.equal(intentPaid.ok, true, intentPaid.error);
+    assert.equal(intentPaid.recorded, true);
+    const intentRecorded = readFileSync(ledger, "utf8");
+    assert.match(intentRecorded, /pay-pi_cs/);
+    assert.equal(intentRecorded.includes("pay-cs_intent"), false);
+    const partial = acceptChargeReturn({ refunded: false, id: "ch_cs", payment_intent: "pi_cs" });
+    assert.equal(partial.ok, true);
+    assert.equal(partial.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), intentRecorded);
+    const missingInvoice = acceptChargeReturn({
+      refunded: true,
+      id: "ch_invoice",
+      invoice: "in_missing",
+      payment_intent: "pi_cs",
+    });
+    assert.equal(missingInvoice.ok, true);
+    assert.equal(missingInvoice.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), intentRecorded);
+    const missingFulfillment = acceptChargeReturn({
+      refunded: true,
+      id: "ch_missing",
+      payment_intent: "pi_cs",
+      metadata: { fulfillment_id: "missing-order" },
+    });
+    assert.equal(missingFulfillment.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), intentRecorded);
+    const returned = acceptChargeReturn({ refunded: true, id: "ch_cs", payment_intent: "pi_cs" });
+    assert.equal(returned.ok, true, returned.error);
+    assert.equal(returned.count, 1);
+    const voided = readFileSync(ledger, "utf8");
+    assert.match(voided, /return:ch_cs:order-cs:0:sku-cleanser/);
+    assert.equal(voided.includes("return:to-cape-town"), false);
+    const returnedAgain = acceptChargeReturn({ refunded: true, id: "ch_cs", payment_intent: { id: "pi_cs" } });
+    assert.equal(returnedAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), voided);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

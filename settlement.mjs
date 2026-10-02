@@ -115,6 +115,13 @@ export function recordPaymentIntentSettlement(intent) {
   return recordSettlement(settlement);
 }
 
+function namedPaymentIntentId(record) {
+  const intent = record?.payment_intent;
+  if (typeof intent === "string") return intent.trim();
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) return "";
+  return named(intent.id);
+}
+
 export function completedCheckoutSettlement(session) {
   if (!session || typeof session !== "object") throw new Error("checkout session is required");
   const metadata = metadataObject(session.metadata);
@@ -122,8 +129,11 @@ export function completedCheckoutSettlement(session) {
   if (!fulfillmentId) return null;
   const currency = codeCurrency(session.currency, "USD");
   const sessionId = named(session.id) || fulfillmentId;
+  const intentId = namedPaymentIntentId(session);
   const settlementId =
-    named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${sessionId}`;
+    named(metadata.settlement_id) ||
+    named(metadata.settlementId) ||
+    (intentId ? `pay-${intentId}` : `pay-${sessionId}`);
   const cents = minorUnits(session.amount_total ?? session.amount_cents);
   if (cents == null) throw new Error("amount must be a positive integer");
   return { settlementId, fulfillmentId, amountCents: cents, currency };

@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -598,6 +598,8 @@ const paymentRouter = router({
       customerId: z.number(),
       amount: z.number(),
       currency: z.string().default('USD'),
+      fulfillmentId: z.string().optional(),
+      settlementId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaymentIntent } = await import('./integrations/stripe');
@@ -605,10 +607,12 @@ const paymentRouter = router({
       const paymentIntent = await createPaymentIntent({
         amount: Math.round(input.amount * 100),
         currency: input.currency,
-        metadata: {
+        metadata: paymentIntentMetadata({
           userId: ctx.user.id.toString(),
           orderId: input.orderId?.toString() || '',
-        },
+          fulfillmentId: input.fulfillmentId,
+          settlementId: input.settlementId,
+        }),
       });
       
       const paymentId = await db.createPayment({

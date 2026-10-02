@@ -49,6 +49,55 @@ function minorUnits(value) {
   return null;
 }
 
+function intentCents(intent) {
+  const received = intent?.amount_received;
+  if (Number.isInteger(received) && received >= 1) return received;
+  const amount = intent?.amount;
+  if (typeof amount === "string" && /^\d+$/.test(amount.trim())) return Number(amount.trim());
+  if (Number.isInteger(amount) && amount >= 1) return amount;
+  throw new Error("amount must be a positive integer");
+}
+
+export function paymentIntentMetadata(input = {}) {
+  const metadata = {};
+  if (input.userId != null && String(input.userId).trim() !== "") metadata.userId = String(input.userId);
+  if (input.orderId != null && String(input.orderId).trim() !== "") metadata.orderId = String(input.orderId);
+  const fulfillmentId = named(input.fulfillmentId ?? input.fulfillment_id);
+  if (fulfillmentId) metadata.fulfillment_id = fulfillmentId;
+  const settlementId = named(input.settlementId ?? input.settlement_id);
+  if (settlementId) metadata.settlement_id = settlementId;
+  return metadata;
+}
+
+export function succeededPaymentIntentSettlement(intent) {
+  if (!intent || typeof intent !== "object") throw new Error("payment intent is required");
+  const metadata = metadataObject(intent.metadata);
+  const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
+  if (!fulfillmentId) return null;
+  const currency = String(intent.currency || "USD").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const intentId = named(intent.id) || fulfillmentId;
+  const settlementId =
+    named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${intentId}`;
+  return {
+    settlementId,
+    fulfillmentId,
+    amountCents: intentCents(intent),
+    currency,
+  };
+}
+
+export function recordPaymentIntentSettlement(intent) {
+  let settlement;
+  try {
+    settlement = succeededPaymentIntentSettlement(intent);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (!settlement) return { ok: true, recorded: false };
+  return recordSettlement(settlement);
+}
+
 export function paystackInitializeMetadata(input = {}) {
   const metadata = {};
   if (input.userId != null) metadata.userId = input.userId;

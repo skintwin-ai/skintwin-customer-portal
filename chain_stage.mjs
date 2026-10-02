@@ -294,7 +294,12 @@ function expandedInvoiceFulfillments(invoice, invoiceId) {
     const found = settledFulfillment(settlementId);
     return found ? [found] : [];
   }
-  return recordedInvoiceFulfillments(invoiceId);
+  const recorded = recordedInvoiceFulfillments(invoiceId);
+  if (recorded.length > 0) return recorded;
+  const intentId = paymentIntentId(invoice);
+  if (!intentId) return [];
+  const found = settledFulfillment(`pay-${intentId}`);
+  return found ? [found] : [];
 }
 
 export function chargeReturnCommands(charge) {

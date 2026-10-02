@@ -1988,11 +1988,11 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
         commands: [
           { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
           { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
-          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 24000 } },
-          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 24000]] } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 28000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 28000]] } },
           { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
-          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 24000]] } },
-          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 24000 } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 28000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 28000 } },
           { command: "fulfill", args: { fulfillment_id: fulfillmentId, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: intentFulfillment, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
@@ -2013,6 +2013,10 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
           { command: "fulfill", args: { fulfillment_id: "order-fresh:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-in_fresh", fulfillment_id: "order-fresh:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
           { command: "fulfill", args: { fulfillment_id: "order-on-line:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-kept:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_kept", fulfillment_id: "order-kept:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-via-intent:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-pi_via", fulfillment_id: "order-via-intent:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
         ],
       }),
       encoding: "utf8",
@@ -2255,6 +2259,64 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     });
     assert.equal(freshAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), freshText);
+    const stringSkipsIntent = acceptChargeReturn({
+      refunded: true,
+      id: "ch_via_string",
+      invoice: "in_via",
+      payment_intent: { id: "pi_other", invoice: { id: "in_via", payment_intent: "pi_via" } },
+    });
+    assert.equal(stringSkipsIntent.ok, true);
+    assert.equal(stringSkipsIntent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), freshText);
+    const missingInvoiceIntent = acceptChargeReturn({
+      refunded: true,
+      id: "ch_via_miss",
+      invoice: { id: "in_via", payment_intent: "pi_missing" },
+      payment_intent: "pi_1",
+    });
+    assert.equal(missingInvoiceIntent.ok, true);
+    assert.equal(missingInvoiceIntent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), freshText);
+    const keptInvoice = acceptChargeReturn({
+      refunded: true,
+      id: "ch_kept",
+      invoice: { id: "in_kept", payment_intent: "pi_via" },
+      payment_intent: "pi_1",
+    });
+    assert.equal(keptInvoice.ok, true, keptInvoice.error);
+    assert.equal(keptInvoice.count, 1);
+    const keptText = readFileSync(ledger, "utf8");
+    assert.match(keptText, /return:ch_kept:order-kept:0:sku-cleanser/);
+    assert.doesNotMatch(keptText, /return:ch_kept:order-via-intent/);
+    assert.doesNotMatch(keptText, /return:to-cape-town/);
+    const fromInvoiceIntent = acceptChargeReturn({
+      refunded: true,
+      id: "ch_via",
+      invoice: { id: "in_via", payment_intent: { id: "pi_via" } },
+      payment_intent: "pi_1",
+    });
+    assert.equal(fromInvoiceIntent.ok, true, fromInvoiceIntent.error);
+    assert.equal(fromInvoiceIntent.count, 1);
+    const viaText = readFileSync(ledger, "utf8");
+    assert.match(viaText, /return:ch_via:order-via-intent:0:sku-cleanser/);
+    assert.doesNotMatch(viaText, /return:ch_via:order-kept/);
+    assert.doesNotMatch(viaText, /return:ch_via:order-settled/);
+    assert.doesNotMatch(viaText, /return:to-cape-town/);
+    const viaAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_via",
+      payment_intent: { id: "pi_1", invoice: { id: "in_via", payment_intent: "pi_via" } },
+    });
+    assert.equal(viaAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), viaText);
+    const partialInvoiceIntent = acceptChargeReturn({
+      refunded: false,
+      id: "ch_via_partial",
+      invoice: { id: "in_partial", payment_intent: "pi_via" },
+    });
+    assert.equal(partialInvoiceIntent.ok, true);
+    assert.equal(partialInvoiceIntent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), viaText);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

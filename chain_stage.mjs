@@ -78,6 +78,35 @@ export function catalogSku(args) {
   };
 }
 
+export function returnSale(args) {
+  return {
+    return_id: text(args.return_id, "return_id"),
+    fulfillment_id: text(args.fulfillment_id, "fulfillment_id"),
+  };
+}
+
+export function saleReturnCommands(returnId, fulfillmentId) {
+  if (fulfillmentId == null || fulfillmentId === "") return [];
+  return [
+    {
+      command: "return_sale",
+      args: returnSale({ return_id: returnId, fulfillment_id: fulfillmentId }),
+    },
+  ];
+}
+
+export function acceptSaleReturn(returnId, fulfillmentId) {
+  let commands;
+  try {
+    commands = saleReturnCommands(returnId, fulfillmentId);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function fulfill(args) {
   const kind = text(args.kind, "kind");
   if (kind !== "retail" && kind !== "treatment") {
@@ -376,6 +405,7 @@ export function handleStage(request) {
   try {
     if (command === "catalog_sku") return commitStage(request, { ok: true, artifact: catalogSku(args) });
     if (command === "fulfill") return commitStage(request, { ok: true, artifact: fulfill(args) });
+    if (command === "return_sale") return commitStage(request, { ok: true, artifact: returnSale(args) });
     return { ok: false, error: `unknown command ${command}` };
   } catch (error) {
     return { ok: false, error: error.message };

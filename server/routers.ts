@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -542,9 +542,21 @@ const orderRouter = router({
     .input(z.object({
       id: z.number(),
       status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded']),
+      fulfillmentId: z.string().optional(),
+      returnId: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      await db.updateOrder(input.id, { status: input.status });
+      if ((input.status === "refunded" || input.status === "cancelled") && input.fulfillmentId) {
+        const returned = acceptSaleReturn(
+          input.returnId || `return:${input.id}:${input.fulfillmentId}`,
+          input.fulfillmentId,
+        );
+        if (!returned.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
+        }
+      }
+      const { fulfillmentId: _fulfillmentId, returnId: _returnId, ...status } = input;
+      await db.updateOrder(status.id, { status: status.status });
       return { success: true };
     }),
   

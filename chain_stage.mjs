@@ -286,12 +286,27 @@ function chargeInvoiceRecord(charge) {
   return null;
 }
 
+function expandedIntentMetadata(invoice, key) {
+  const intent = invoice?.payment_intent;
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) return "";
+  return chargeMetadata(intent, key);
+}
+
 function expandedInvoiceFulfillments(invoice, invoiceId) {
   const named = voidedInvoiceFulfillments(invoice);
   if (named.length > 0) return named;
   const settlementId = invoiceMetadata(invoice, "settlement_id") || invoiceMetadata(invoice, "settlementId");
   if (settlementId) {
     const found = settledFulfillment(settlementId);
+    return found ? [found] : [];
+  }
+  const intentFulfillment =
+    expandedIntentMetadata(invoice, "fulfillment_id") || expandedIntentMetadata(invoice, "fulfillmentId");
+  if (intentFulfillment) return [intentFulfillment];
+  const intentSettlement =
+    expandedIntentMetadata(invoice, "settlement_id") || expandedIntentMetadata(invoice, "settlementId");
+  if (intentSettlement) {
+    const found = settledFulfillment(intentSettlement);
     return found ? [found] : [];
   }
   const recorded = recordedInvoiceFulfillments(invoiceId);

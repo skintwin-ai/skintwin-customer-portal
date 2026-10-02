@@ -1,7 +1,7 @@
 // Map a consultation skin analysis onto the skintwin outcome command.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { loadChainLocate } from "./chain_stage.mjs";
 
 function text(value) {
   return typeof value === "string" ? value.trim() : value;
@@ -23,25 +23,14 @@ export function outcomeCommand(analysis) {
   };
 }
 
-function useSharedLedger() {
-  const hub = process.env.SKINTWIN_HUB_ROOT
-    || ["/agent/repos/skintwin-ecosystem-design", "/workspace/repos/skintwin-ecosystem-design"]
-      .find((candidate) => existsSync(`${candidate}/domain/ledger.py`));
-  if (!hub) return;
-  process.env.SKINTWIN_HUB_ROOT ||= hub;
-  process.env.SKINTWIN_CHAIN_LEDGER ||= `${hub}/var/supply-chain.jsonl`;
-}
-
 export function recordSkinOutcome(analysis) {
   const command = outcomeCommand(analysis);
   if (!command) return { ok: true, recorded: false };
-  const stage = [
-    process.env.SKINTWIN_OUTCOME_STAGE,
-    "/agent/repos/skintwin/chain_stage.py",
-    "/workspace/repos/skintwin/chain_stage.py",
-  ].find((candidate) => candidate && existsSync(candidate));
+  const locate = loadChainLocate();
+  if (!locate) return { ok: false, error: "supply-chain hub is not present" };
+  const stage = process.env.SKINTWIN_OUTCOME_STAGE || locate.stageEntry("outcome");
   if (!stage) return { ok: false, error: "skintwin outcome stage is not present" };
-  useSharedLedger();
+  locate.bindLedger();
   const child = spawnSync("python3", [stage], {
     input: JSON.stringify(command),
     encoding: "utf8",

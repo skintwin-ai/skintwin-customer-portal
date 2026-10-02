@@ -98,6 +98,32 @@ export function recordPaymentIntentSettlement(intent) {
   return recordSettlement(settlement);
 }
 
+export function completedCheckoutSettlement(session) {
+  if (!session || typeof session !== "object") throw new Error("checkout session is required");
+  const metadata = metadataObject(session.metadata);
+  const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
+  if (!fulfillmentId) return null;
+  const currency = String(session.currency || "USD").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const sessionId = named(session.id) || fulfillmentId;
+  const settlementId =
+    named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${sessionId}`;
+  const cents = minorUnits(session.amount_total ?? session.amount_cents);
+  if (cents == null) throw new Error("amount must be a positive integer");
+  return { settlementId, fulfillmentId, amountCents: cents, currency };
+}
+
+export function recordCheckoutSettlement(session) {
+  let settlement;
+  try {
+    settlement = completedCheckoutSettlement(session);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (!settlement) return { ok: true, recorded: false };
+  return recordSettlement(settlement);
+}
+
 function invoiceCurrency(invoice) {
   const currency = String(invoice.currency || "USD").trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");

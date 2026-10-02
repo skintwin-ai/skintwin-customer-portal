@@ -280,6 +280,71 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
       },
     ],
   );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "paid",
+      payment_intent: { id: "pi_meta", metadata: { fulfillment_id: "order-pi" } },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "void",
+      lines: { data: [{ metadata: { fulfillment_id: "order-line" } }] },
+      payment_intent: { id: "pi_meta", metadata: { fulfillment_id: "order-pi" } },
+    }),
+    [
+      {
+        command: "return_sale",
+        args: { return_id: "return:in_pi:order-line", fulfillment_id: "order-line" },
+      },
+    ],
+  );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "void",
+      metadata: { settlement_id: "pay-absent" },
+      payment_intent: { id: "pi_meta", metadata: { fulfillment_id: "order-pi" } },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "void",
+      payment_intent: { id: "pi_meta", metadata: { fulfillment_id: "order-pi" } },
+    }),
+    [
+      {
+        command: "return_sale",
+        args: { return_id: "return:in_pi:order-pi", fulfillment_id: "order-pi" },
+      },
+    ],
+  );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "void",
+      payment_intent: { id: "pi_meta", metadata: { fulfillmentId: "order-pi" } },
+    }),
+    [
+      {
+        command: "return_sale",
+        args: { return_id: "return:in_pi:order-pi", fulfillment_id: "order-pi" },
+      },
+    ],
+  );
+  assert.deepEqual(
+    voidedInvoiceReturnCommands({
+      id: "in_pi",
+      status: "void",
+      payment_intent: { id: "pi_meta", metadata: { settlement_id: "pay-absent" } },
+    }),
+    [],
+  );
   const dir = mkdtempSync(join(tmpdir(), "portal-invoice-"));
   const ledger = join(dir, "supply-chain.jsonl");
   const locate = loadChainLocate();
@@ -310,14 +375,22 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
         commands: [
           { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
           { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
-          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
-          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 12000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 12000]] } },
           { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
-          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
-          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 12000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 12000 } },
           { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-intent:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-pi_1", fulfillment_id: "order-intent:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
+          { command: "fulfill", args: { fulfillment_id: "order-pi-sale:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-explicit-pi", fulfillment_id: "order-pi-sale:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
+          { command: "fulfill", args: { fulfillment_id: "order-pi-settle:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-snake-pi", fulfillment_id: "order-pi-settle:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
+          { command: "fulfill", args: { fulfillment_id: "order-bait:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-pi_bait", fulfillment_id: "order-bait:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
+          { command: "fulfill", args: { fulfillment_id: "order-kept:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_kept", fulfillment_id: "order-kept:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
         ],
       }),
       encoding: "utf8",
@@ -385,6 +458,87 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
     const intentAgain = acceptVoidedInvoiceReturn({ id: "in_intent", status: "void", payment_intent: { id: "pi_1" } });
     assert.equal(intentAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), intentVoided);
+    const stopped = acceptVoidedInvoiceReturn({
+      id: "in_pi",
+      status: "void",
+      metadata: { settlementId: "pay-absent" },
+      payment_intent: { id: "pi_bait", metadata: { fulfillment_id: "order-pi-sale:0:sku-cleanser" } },
+    });
+    assert.equal(stopped.ok, true);
+    assert.equal(stopped.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), intentVoided);
+    const missingNamed = acceptVoidedInvoiceReturn({
+      id: "in_pi",
+      status: "void",
+      payment_intent: { id: "pi_bait", metadata: { fulfillment_id: "missing-order" } },
+    });
+    assert.equal(missingNamed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), intentVoided);
+    const fromIntentSale = acceptVoidedInvoiceReturn({
+      id: "in_kept",
+      status: "void",
+      payment_intent: {
+        id: "pi_1",
+        metadata: { fulfillment_id: "order-pi-sale:0:sku-cleanser", settlement_id: "pay-snake-pi" },
+      },
+    });
+    assert.equal(fromIntentSale.ok, true, fromIntentSale.error);
+    assert.equal(fromIntentSale.count, 1);
+    const intentSaleVoided = readFileSync(ledger, "utf8");
+    assert.match(intentSaleVoided, /return:in_kept:order-pi-sale:0:sku-cleanser/);
+    assert.equal(intentSaleVoided.includes("return:in_kept:order-kept"), false);
+    assert.equal(intentSaleVoided.includes("return:in_kept:order-pi-settle"), false);
+    assert.equal(intentSaleVoided.includes("return:in_kept:order-bait"), false);
+    assert.equal(intentSaleVoided.includes("return:to-cape-town"), false);
+    const intentSaleAgain = acceptVoidedInvoiceReturn({
+      id: "in_kept",
+      status: "void",
+      payment_intent: { id: "pi_1", metadata: { fulfillmentId: "order-pi-sale:0:sku-cleanser" } },
+    });
+    assert.equal(intentSaleAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), intentSaleVoided);
+    const absentIntent = acceptVoidedInvoiceReturn({
+      id: "in_other",
+      status: "void",
+      payment_intent: { id: "pi_bait", metadata: { settlement_id: "pay-absent" } },
+    });
+    assert.equal(absentIntent.ok, true);
+    assert.equal(absentIntent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), intentSaleVoided);
+    const fromIntentSettlement = acceptVoidedInvoiceReturn({
+      id: "in_other",
+      status: "void",
+      payment_intent: { id: "pi_bait", metadata: { settlementId: "pay-snake-pi" } },
+    });
+    assert.equal(fromIntentSettlement.ok, true, fromIntentSettlement.error);
+    assert.equal(fromIntentSettlement.count, 1);
+    const intentSettlementVoided = readFileSync(ledger, "utf8");
+    assert.match(intentSettlementVoided, /return:in_other:order-pi-settle:0:sku-cleanser/);
+    assert.equal(intentSettlementVoided.includes("return:in_other:order-bait"), false);
+    assert.equal(intentSettlementVoided.includes("return:in_other:order-pi-sale"), false);
+    assert.equal(intentSettlementVoided.includes("return:in_other:order-kept"), false);
+    assert.equal(intentSettlementVoided.includes("return:to-cape-town"), false);
+    const intentSettlementAgain = acceptVoidedInvoiceReturn({
+      id: "in_other",
+      status: "void",
+      payment_intent: { id: "pi_bait", metadata: { settlementId: "pay-snake-pi" } },
+    });
+    assert.equal(intentSettlementAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), intentSettlementVoided);
+    const fromIntentId = acceptVoidedInvoiceReturn({
+      id: "in_bait",
+      status: "void",
+      payment_intent: { id: "pi_bait" },
+    });
+    assert.equal(fromIntentId.ok, true, fromIntentId.error);
+    assert.equal(fromIntentId.count, 1);
+    const baitVoided = readFileSync(ledger, "utf8");
+    assert.match(baitVoided, /return:in_bait:order-bait:0:sku-cleanser/);
+    assert.equal(baitVoided.includes("return:in_bait:order-kept"), false);
+    assert.equal(baitVoided.includes("return:to-cape-town"), false);
+    const baitAgain = acceptVoidedInvoiceReturn({ id: "in_bait", status: "void", payment_intent: "pi_bait" });
+    assert.equal(baitAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), baitVoided);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

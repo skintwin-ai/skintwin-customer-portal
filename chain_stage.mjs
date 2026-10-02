@@ -457,26 +457,7 @@ function invoiceKey(invoice) {
 
 export function voidedInvoiceReturnCommands(invoice) {
   if (!invoice || typeof invoice !== "object" || invoice.status !== "void") return [];
-  let fulfillments = voidedInvoiceFulfillments(invoice);
-  if (fulfillments.length === 0) {
-    const settlementId = invoiceMetadata(invoice, "settlement_id") || invoiceMetadata(invoice, "settlementId");
-    if (settlementId) {
-      const found = settledFulfillment(settlementId);
-      if (!found) return [];
-      fulfillments = [found];
-    } else {
-      const invoiceId = invoiceKey(invoice);
-      if (!invoiceId) return [];
-      fulfillments = recordedInvoiceFulfillments(invoiceId);
-      if (fulfillments.length === 0) {
-        const intentId = paymentIntentId(invoice);
-        if (!intentId) return [];
-        const found = settledFulfillment(`pay-${intentId}`);
-        if (!found) return [];
-        fulfillments = [found];
-      }
-    }
-  }
+  const fulfillments = expandedInvoiceFulfillments(invoice, invoiceKey(invoice));
   if (fulfillments.length === 0) return [];
   const key = text(invoiceKey(invoice), "invoice");
   return fulfillments.flatMap((fulfillmentId) => saleReturnCommands(`return:${key}:${fulfillmentId}`, fulfillmentId));

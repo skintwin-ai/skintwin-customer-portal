@@ -300,18 +300,26 @@ export function formulaIdFromShopify(product) {
   return null;
 }
 
+function namedCatalogSku(record) {
+  for (const key of ["sku", "sku_id", "skuId"]) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return "";
+}
+
 function catalogSkus(product, name) {
   const variants = Array.isArray(product.variants) ? product.variants : [];
   const skus = [];
   const seen = new Set();
   for (const variant of variants) {
-    const sku = typeof variant?.sku === "string" ? variant.sku.trim() : "";
+    const sku = namedCatalogSku(variant);
     if (!sku || seen.has(sku)) continue;
     seen.add(sku);
     skus.push(sku);
   }
   if (skus.length) return skus;
-  return [text(product.sku || name, "sku")];
+  return [text(namedCatalogSku(product) || name, "sku")];
 }
 
 function variantFormulaSkus(product) {
@@ -319,7 +327,7 @@ function variantFormulaSkus(product) {
   const named = [];
   const seen = new Set();
   for (const variant of variants) {
-    const sku = typeof variant?.sku === "string" ? variant.sku.trim() : "";
+    const sku = namedCatalogSku(variant);
     if (!sku || seen.has(sku)) continue;
     const formulaId = formulaIdFromShopify(variant);
     if (!formulaId) continue;

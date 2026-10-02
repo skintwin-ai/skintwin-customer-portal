@@ -509,6 +509,93 @@ test("a variant formula metafield catalogs that sku once", () => {
   }
 });
 
+test("a shopify variant named by sku_id is catalogued once", () => {
+  const commands = shopifyCatalogCommands([
+    {
+      title: "Gentle cleanser",
+      tags: "formula:cleanser",
+      variants: [
+        { sku: "sku-serum", sku_id: "sku-other" },
+        { sku: "  ", sku_id: " sku-cleanser " },
+        { skuId: "sku-tube" },
+        { title: "unnamed" },
+      ],
+    },
+    {
+      title: "Product sku",
+      tags: "formula:cleanser",
+      sku: "  ",
+      sku_id: "sku-product",
+      variants: [{ title: "Default" }],
+    },
+    {
+      title: "Vitamin C serum",
+      tags: "retail",
+      variants: [{ sku: "  ", sku_id: "sku-variant", formula_id: "serum-c" }],
+    },
+    { title: "Shelf", tags: "retail", sku_id: "sku-shelf", variants: [{ title: "Default" }] },
+  ]);
+  assert.deepEqual(
+    commands.map((command) => [command.args.sku_id, command.args.formula_id]),
+    [
+      ["sku-serum", "cleanser"],
+      ["sku-cleanser", "cleanser"],
+      ["sku-tube", "cleanser"],
+      ["sku-product", "cleanser"],
+      ["sku-variant", "serum-c"],
+    ],
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-variant-sku-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const product = {
+    title: "Gentle cleanser",
+    tags: "formula:cleanser",
+    variants: [{ sku: "  ", sku_id: "sku-cleanser" }, { title: "unnamed" }],
+  };
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+          { command: "define_formula", args: { formula_id: "serum-c", name: "Vitamin C serum", lines: [["glycerin", 2000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const unnamed = acceptShopifyCatalog([{ title: "Shelf", tags: "retail", sku_id: "sku-shelf" }]);
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.count, 0);
+    const recorded = acceptShopifyCatalog([product]);
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.count, 1);
+    const text = readFileSync(ledger, "utf8");
+    assert.match(text, /sku-cleanser/);
+    assert.equal(text.includes("sku-shelf"), false);
+    const again = acceptShopifyCatalog([product]);
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    const renamed = acceptShopifyCatalog([{ ...product, tags: "formula:serum-c" }]);
+    assert.equal(renamed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a shopify formula tag becomes a catalog sku", () => {
   const commands = shopifyCatalogCommands([
     {

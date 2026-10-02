@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -511,6 +511,8 @@ const orderRouter = router({
         productId: z.number().optional(),
         name: z.string(),
         sku: z.string().optional(),
+        sku_id: z.string().optional(),
+        skuId: z.string().optional(),
         quantity: z.number(),
         unitPrice: z.string(),
         total: z.string(),
@@ -518,6 +520,7 @@ const orderRouter = router({
         location: z.string().optional(),
         milligrams: z.number().int().positive().optional(),
         practitionerId: z.string().optional(),
+        practitioner_id: z.string().optional(),
       })),
     }))
     .mutation(async ({ input }) => {
@@ -528,13 +531,10 @@ const orderRouter = router({
       }
       const orderId = await db.createOrder(orderData);
       
-      const orderItems = items.map(item => {
-        const { location: _location, milligrams: _milligrams, practitionerId: _practitionerId, ...stored } = item;
-        return {
-          orderId,
-          ...stored,
-        };
-      });
+      const orderItems = items.map(item => ({
+        orderId,
+        ...storedOrderLine(item),
+      }));
       await db.createOrderItems(orderItems);
       
       return { id: orderId };
@@ -874,8 +874,10 @@ const bookingRouter = router({
     .input(z.object({
       id: z.number(),
       delivery: z.object({
-        skuId: z.string(),
-        batchId: z.string(),
+        skuId: z.string().optional(),
+        sku_id: z.string().optional(),
+        batchId: z.string().optional(),
+        batch_id: z.string().optional(),
         source: z.string(),
         destination: z.string(),
         milligrams: z.number().int().positive(),

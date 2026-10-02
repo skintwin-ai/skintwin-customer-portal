@@ -70,6 +70,14 @@ function positive(value, label) {
   return value;
 }
 
+function namedField(record, ...keys) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+  return "";
+}
+
 export function catalogSku(args) {
   return {
     sku_id: text(args.sku_id, "sku_id"),
@@ -184,6 +192,21 @@ function namedPractitioner(item, therapistId) {
   if (typeof item?.practitioner_id === "string" && item.practitioner_id.trim() !== "") return item.practitioner_id.trim();
   if (therapistId == null) return undefined;
   return String(therapistId);
+}
+
+export function storedOrderLine(item) {
+  const sku = namedSku(item);
+  const {
+    location: _location,
+    milligrams: _milligrams,
+    practitionerId: _practitionerId,
+    practitioner_id: _practitionerSnake,
+    sku_id: _skuSnake,
+    skuId: _skuCamel,
+    ...stored
+  } = item || {};
+  if (sku) stored.sku = sku;
+  return stored;
 }
 
 export function fulfillmentCommands(orderNumber, items, therapistId) {
@@ -528,8 +551,8 @@ export function bookingDeliveryCommands(bookingId, delivery) {
       command: "transfer",
       args: {
         transfer_id: `booking:${id}`,
-        sku_id: text(delivery.skuId ?? delivery.sku_id, "sku_id"),
-        batch_id: text(delivery.batchId ?? delivery.batch_id, "batch_id"),
+        sku_id: text(namedField(delivery, "skuId", "sku_id"), "sku_id"),
+        batch_id: text(namedField(delivery, "batchId", "batch_id"), "batch_id"),
         source,
         destination,
         milligrams: positive(delivery.milligrams, "milligrams"),

@@ -1,49 +1,61 @@
 #!/usr/bin/env node
-// Catalog SKUs and customer fulfillments for the customer portal.
+// Catalog and fulfillment commands for the customer portal API and the hub ledger.
 
 import { readFileSync } from "node:fs";
-
-const request = JSON.parse(readFileSync(0, "utf8"));
-const command = request.command;
-const args = request.args || {};
-
-function fail(message) {
-  process.stdout.write(JSON.stringify({ ok: false, error: message }));
-  process.exit(1);
-}
+import { pathToFileURL } from "node:url";
 
 function text(value, label) {
-  if (typeof value !== "string" || value.trim() === "") fail(`${label} is required`);
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${label} is required`);
+  }
   return value.trim();
 }
 
 function positive(value, label) {
-  if (!Number.isInteger(value) || value < 1) fail(`${label} must be a positive integer`);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
   return value;
 }
 
-let artifact;
-if (command === "catalog_sku") {
-  artifact = {
+export function catalogSku(args) {
+  return {
     sku_id: text(args.sku_id, "sku_id"),
     formula_id: text(args.formula_id, "formula_id"),
     name: text(args.name, "sku name"),
   };
-} else if (command === "fulfill") {
+}
+
+export function fulfill(args) {
   const kind = text(args.kind, "kind");
-  if (kind !== "retail" && kind !== "treatment") fail(`unknown fulfillment kind ${kind}`);
-  let practitionerId = null;
-  if (kind === "treatment") practitionerId = text(args.practitioner_id, "practitioner_id");
-  artifact = {
+  if (kind !== "retail" && kind !== "treatment") {
+    throw new Error(`unknown fulfillment kind ${kind}`);
+  }
+  return {
     fulfillment_id: text(args.fulfillment_id, "fulfillment_id"),
     sku_id: text(args.sku_id, "sku_id"),
     location: text(args.location, "location"),
     milligrams: positive(args.milligrams, "milligrams"),
     kind,
-    practitioner_id: practitionerId,
+    practitioner_id: kind === "treatment" ? text(args.practitioner_id, "practitioner_id") : null,
   };
-} else {
-  fail(`unknown command ${command}`);
 }
 
-process.stdout.write(JSON.stringify({ ok: true, artifact }));
+export function handleStage(request) {
+  const command = request?.command;
+  const args = request?.args || {};
+  try {
+    if (command === "catalog_sku") return { ok: true, artifact: catalogSku(args) };
+    if (command === "fulfill") return { ok: true, artifact: fulfill(args) };
+    return { ok: false, error: `unknown command ${command}` };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  const result = handleStage(JSON.parse(readFileSync(0, "utf8")));
+  process.stdout.write(JSON.stringify(result));
+  if (!result.ok) process.exit(1);
+}

@@ -5,6 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
+import { acceptSupplyChainCommand } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -375,6 +376,7 @@ const productRouter = router({
       name: z.string(),
       description: z.string().optional(),
       sku: z.string().optional(),
+      formulaId: z.string().optional(),
       price: z.string(),
       costPrice: z.string().optional(),
       category: z.string().optional(),
@@ -382,7 +384,21 @@ const productRouter = router({
       inventory: z.number().default(0),
     }))
     .mutation(async ({ input }) => {
-      const id = await db.createProduct(input);
+      if (input.formulaId) {
+        const accepted = acceptSupplyChainCommand({
+          command: "catalog_sku",
+          args: {
+            sku_id: input.sku || input.name,
+            formula_id: input.formulaId,
+            name: input.name,
+          },
+        });
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+      }
+      const { formulaId: _formulaId, ...product } = input;
+      const id = await db.createProduct(product);
       return { id };
     }),
   
@@ -1014,6 +1030,20 @@ export const appRouter = router({
   notification: notificationRouter,
   report: reportRouter,
   audit: auditRouter,
+  supplyChain: router({
+    command: publicProcedure
+      .input(z.object({
+        command: z.string(),
+        args: z.record(z.any()).optional(),
+      }))
+      .mutation(({ input }) => {
+        const accepted = acceptSupplyChainCommand(input);
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+        return accepted.artifact;
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

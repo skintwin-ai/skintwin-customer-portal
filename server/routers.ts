@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand } from "./supplyChain";
+import { acceptOrderFulfillments, acceptSupplyChainCommand, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -292,6 +292,10 @@ const consultationRouter = router({
       duration: z.number().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const recorded = recordSkinOutcome(input.skinAnalysis);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       const id = await db.createConsultation({
         ...input,
         therapistId: ctx.therapist.id,
@@ -308,6 +312,10 @@ const consultationRouter = router({
       status: z.enum(['scheduled', 'in_progress', 'completed', 'cancelled', 'no_show']).optional(),
     }))
     .mutation(async ({ input }) => {
+      const recorded = recordSkinOutcome(input.skinAnalysis);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       const { id, ...data } = input;
       await db.updateConsultation(id, data);
       return { success: true };

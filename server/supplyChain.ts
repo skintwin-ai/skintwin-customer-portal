@@ -1,5 +1,8 @@
 import { existsSync } from "node:fs";
 import { fulfillmentCommands, handleStage } from "../chain_stage.mjs";
+import { recordSkinOutcome } from "../outcome.mjs";
+
+export { recordSkinOutcome };
 
 function useSharedLedger() {
   const hub = process.env.SKINTWIN_HUB_ROOT

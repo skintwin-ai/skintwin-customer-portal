@@ -797,6 +797,13 @@ const paymentRouter = router({
             order ? await db.getOrderItems(order.id) : [],
             input.id,
           );
+          if (returned.ok && returned.count === 0) {
+            returned = acceptPaymentReturn({
+              status: "refunded",
+              id: input.id,
+              processorPaymentId: stored?.processorPaymentId,
+            });
+          }
         }
         if (!returned.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });

@@ -116,13 +116,27 @@ export function acceptSaleReturn(returnId, fulfillmentId) {
   return commitAll(commands);
 }
 
+function paymentProcessorId(payment) {
+  if (!payment || typeof payment !== "object") return "";
+  for (const key of ["processorPaymentId", "processor_payment_id"]) {
+    const value = payment[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return paymentIntentId(payment);
+}
+
 export function paymentReturnCommands(payment) {
   if (!payment || typeof payment !== "object" || payment.status !== "refunded") return [];
   const sale = namedSale(payment);
-  if (!sale.fulfillmentId) return [];
+  let fulfillmentId = sale.fulfillmentId;
+  if (!fulfillmentId) {
+    const processorId = paymentProcessorId(payment);
+    fulfillmentId = processorId ? settledFulfillment(`pay-${processorId}`) : "";
+  }
+  if (!fulfillmentId) return [];
   const paymentId = payment.id ?? payment.paymentId ?? "payment";
-  const returnId = sale.returnId || `return:${paymentId}:${sale.fulfillmentId}`;
-  return saleReturnCommands(returnId, sale.fulfillmentId);
+  const returnId = sale.returnId || `return:${paymentId}:${fulfillmentId}`;
+  return saleReturnCommands(returnId, fulfillmentId);
 }
 
 export function acceptPaymentReturn(payment) {

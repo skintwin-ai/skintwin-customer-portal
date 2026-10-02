@@ -1911,11 +1911,11 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
         commands: [
           { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
           { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
-          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 10000 } },
-          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 10000]] } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 16000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 16000]] } },
           { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
-          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 10000]] } },
-          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 10000 } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 16000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 16000 } },
           { command: "fulfill", args: { fulfillment_id: fulfillmentId, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: intentFulfillment, sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "fulfill", args: { fulfillment_id: "order-settled:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
@@ -1924,6 +1924,12 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
           { command: "settle", args: { settlement_id: "pay-snake", fulfillment_id: "order-named:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
           { command: "fulfill", args: { fulfillment_id: "order-invoice:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
           { command: "settle", args: { settlement_id: "pay-in_1", fulfillment_id: "order-invoice:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-lines:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_lines:0:order-lines:0:sku-cleanser", fulfillment_id: "order-lines:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-lines:1:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_lines:1:order-lines:1:sku-cleanser", fulfillment_id: "order-lines:1:sku-cleanser", amount_cents: 2000, currency: "USD" } },
+          { command: "fulfill", args: { fulfillment_id: "order-in10:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-in_10", fulfillment_id: "order-in10:0:sku-cleanser", amount_cents: 2000, currency: "USD" } },
         ],
       }),
       encoding: "utf8",
@@ -2009,6 +2015,8 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     assert.equal(fromInvoice.count, 1);
     const invoiceText = readFileSync(ledger, "utf8");
     assert.match(invoiceText, /return:ch_invoice:order-invoice:0:sku-cleanser/);
+    assert.doesNotMatch(invoiceText, /return:ch_invoice:order-in10/);
+    assert.doesNotMatch(invoiceText, /return:ch_invoice:order-lines/);
     assert.doesNotMatch(invoiceText, /return:to-cape-town/);
     const invoiceAgain = acceptChargeReturn({
       refunded: true,
@@ -2017,6 +2025,39 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     });
     assert.equal(invoiceAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), invoiceText);
+    const fromLines = acceptChargeReturn({
+      refunded: true,
+      id: "ch_lines",
+      invoice: { id: "in_lines" },
+      payment_intent: "pi_other",
+    });
+    assert.equal(fromLines.ok, true, fromLines.error);
+    assert.equal(fromLines.count, 2);
+    const linesText = readFileSync(ledger, "utf8");
+    assert.match(linesText, /return:ch_lines:order-lines:0:sku-cleanser/);
+    assert.match(linesText, /return:ch_lines:order-lines:1:sku-cleanser/);
+    assert.doesNotMatch(linesText, /return:ch_lines:order-in10/);
+    assert.doesNotMatch(linesText, /return:to-cape-town/);
+    const linesAgain = acceptChargeReturn({
+      refunded: true,
+      id: "ch_lines",
+      invoice: "in_lines",
+    });
+    assert.equal(linesAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), linesText);
+    const fromTen = acceptChargeReturn({
+      refunded: true,
+      id: "ch_in10",
+      invoice: "in_10",
+      payment_intent: "pi_other",
+    });
+    assert.equal(fromTen.ok, true, fromTen.error);
+    assert.equal(fromTen.count, 1);
+    const tenText = readFileSync(ledger, "utf8");
+    assert.match(tenText, /return:ch_in10:order-in10:0:sku-cleanser/);
+    assert.doesNotMatch(tenText, /return:ch_in10:order-invoice/);
+    assert.doesNotMatch(tenText, /return:ch_in10:order-lines/);
+    assert.doesNotMatch(tenText, /return:to-cape-town/);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

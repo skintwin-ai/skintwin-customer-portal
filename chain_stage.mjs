@@ -239,21 +239,24 @@ function chargeSettlementId(charge) {
   return "";
 }
 
-function chargeFulfillmentId(charge) {
+function statedChargeFulfillment(charge) {
   const stated = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
   if (stated) return stated;
   const intent = charge?.payment_intent;
   if (intent && typeof intent === "object" && !Array.isArray(intent)) {
-    const named = chargeMetadata(intent, "fulfillment_id") || chargeMetadata(intent, "fulfillmentId");
-    if (named) return named;
+    return chargeMetadata(intent, "fulfillment_id") || chargeMetadata(intent, "fulfillmentId");
   }
-  const settlementId = chargeSettlementId(charge);
-  if (settlementId) return settledFulfillment(settlementId);
-  const invoiceId = chargeInvoiceId(charge);
-  if (invoiceId) return settledFulfillment(`pay-${invoiceId}`);
-  const intentId = paymentIntentId(charge);
-  if (!intentId) return "";
-  return settledFulfillment(`pay-${intentId}`);
+  return "";
+}
+
+function chargeSaleReturns(charge, fulfillmentIds) {
+  const chargeId = text(String(charge.id ?? ""), "charge");
+  const statedReturn = chargeMetadata(charge, "return_id") || chargeMetadata(charge, "returnId");
+  return fulfillmentIds.flatMap((fulfillmentId) => {
+    const returnId =
+      fulfillmentIds.length === 1 && statedReturn ? statedReturn : `return:${chargeId}:${fulfillmentId}`;
+    return saleReturnCommands(returnId, fulfillmentId);
+  });
 }
 
 function chargeInvoiceId(charge) {
@@ -265,12 +268,21 @@ function chargeInvoiceId(charge) {
 
 export function chargeReturnCommands(charge) {
   if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
-  const fulfillmentId = chargeFulfillmentId(charge);
-  if (!fulfillmentId) return [];
-  const chargeId = text(String(charge.id ?? ""), "charge");
-  const returnId =
-    chargeMetadata(charge, "return_id") || chargeMetadata(charge, "returnId") || `return:${chargeId}:${fulfillmentId}`;
-  return saleReturnCommands(returnId, fulfillmentId);
+  const stated = statedChargeFulfillment(charge);
+  if (stated) return chargeSaleReturns(charge, [stated]);
+  const settlementId = chargeSettlementId(charge);
+  if (settlementId) {
+    const found = settledFulfillment(settlementId);
+    if (!found) return [];
+    return chargeSaleReturns(charge, [found]);
+  }
+  const invoiceId = chargeInvoiceId(charge);
+  if (invoiceId) return chargeSaleReturns(charge, recordedInvoiceFulfillments(invoiceId));
+  const intentId = paymentIntentId(charge);
+  if (!intentId) return [];
+  const found = settledFulfillment(`pay-${intentId}`);
+  if (!found) return [];
+  return chargeSaleReturns(charge, [found]);
 }
 
 export function acceptChargeReturn(charge) {

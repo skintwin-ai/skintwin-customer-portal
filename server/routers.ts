@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptSupplyChainCommand, catalogProduct, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -393,13 +393,10 @@ const productRouter = router({
     }))
     .mutation(async ({ input }) => {
       if (input.formulaId) {
-        const accepted = acceptSupplyChainCommand({
-          command: "catalog_sku",
-          args: {
-            sku_id: input.sku || input.name,
-            formula_id: input.formulaId,
-            name: input.name,
-          },
+        const accepted = catalogProduct({
+          sku: input.sku,
+          name: input.name,
+          formulaId: input.formulaId,
         });
         if (!accepted.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });

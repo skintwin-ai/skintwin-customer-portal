@@ -118,6 +118,35 @@ export function fulfillmentCommands(orderNumber, items, therapistId) {
   return commands;
 }
 
+export function catalogProduct(input) {
+  if (!input?.formulaId) return { ok: true, recorded: false };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return handleStage({
+    command: "catalog_sku",
+    args: {
+      sku_id: input.sku || input.name,
+      formula_id: input.formulaId,
+      name: input.name,
+    },
+  });
+}
+
+export function acceptOrderFulfillments(orderNumber, items, therapistId) {
+  let commands;
+  try {
+    commands = fulfillmentCommands(orderNumber, items, therapistId);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  for (const command of commands) {
+    const accepted = handleStage(command);
+    if (!accepted.ok) return accepted;
+  }
+  return { ok: true, count: commands.length };
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

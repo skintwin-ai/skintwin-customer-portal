@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, purchaseReceiptCommands, shopifyCatalogCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, purchaseReceiptCommands, shopifyCatalogCommands, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -297,5 +297,52 @@ test("a received purchase order against an empty ledger writes nothing", () => {
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+  }
+});
+
+test("a supplier named for an ingredient is qualified once", () => {
+  assert.equal(supplierQualificationCommands({ name: "Inland Humectants" }).length, 0);
+  const commands = supplierQualificationCommands({
+    name: "Inland Humectants",
+    ingredientId: "glycerin",
+  });
+  assert.equal(commands[0].args.qualification_id, "qual:glycerin:Inland Humectants");
+  assert.equal(commands[0].args.ingredient_id, "glycerin");
+  const dir = mkdtempSync(join(tmpdir(), "portal-supplier-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const missing = acceptSupplierQualification({ name: "Inland Humectants", ingredientId: "glycerin" });
+    assert.equal(missing.ok, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const qualified = acceptSupplierQualification({ name: "Inland Humectants", ingredientId: "glycerin" });
+    assert.equal(qualified.ok, true);
+    assert.equal(qualified.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /qual:glycerin:Inland Humectants/);
+    const again = acceptSupplierQualification({ name: "Inland Humectants", ingredientId: "glycerin" });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });

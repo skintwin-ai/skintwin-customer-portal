@@ -289,6 +289,39 @@ export function purchaseReceiptCommands(poNumber, receipts) {
   return commands;
 }
 
+export function supplierQualificationCommands(supplier) {
+  if (!supplier || typeof supplier !== "object" || Array.isArray(supplier)) {
+    throw new Error("supplier is required");
+  }
+  const ingredientId = named(supplier, "ingredient_id", "ingredientId");
+  if (!ingredientId) return [];
+  const supplierName = text(supplier.name, "supplier_name");
+  const qualificationId =
+    named(supplier, "qualification_id", "qualificationId") || `qual:${ingredientId}:${supplierName}`;
+  return [
+    {
+      command: "qualify_supplier",
+      args: {
+        qualification_id: text(qualificationId, "qualification_id"),
+        supplier_name: supplierName,
+        ingredient_id: ingredientId,
+      },
+    },
+  ];
+}
+
+export function acceptSupplierQualification(supplier) {
+  let commands;
+  try {
+    commands = supplierQualificationCommands(supplier);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function acceptPurchaseReceipt(poNumber, receipts) {
   let commands;
   try {

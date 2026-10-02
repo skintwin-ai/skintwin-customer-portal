@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -933,9 +933,16 @@ const supplierRouter = router({
       phone: z.string().optional(),
       address: z.string().optional(),
       erpnextSupplierId: z.string().optional(),
+      ingredientId: z.string().optional(),
+      qualificationId: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const id = await db.createSupplier(input);
+      const accepted = acceptSupplierQualification(input);
+      if (!accepted.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+      }
+      const { ingredientId: _ingredientId, qualificationId: _qualificationId, ...supplier } = input;
+      const id = await db.createSupplier(supplier);
       return { id };
     }),
 });

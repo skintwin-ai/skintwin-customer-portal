@@ -420,6 +420,13 @@ export function voidedInvoiceReturnCommands(invoice) {
       const invoiceId = invoiceKey(invoice);
       if (!invoiceId) return [];
       fulfillments = recordedInvoiceFulfillments(invoiceId);
+      if (fulfillments.length === 0) {
+        const intentId = paymentIntentId(invoice);
+        if (!intentId) return [];
+        const found = settledFulfillment(`pay-${intentId}`);
+        if (!found) return [];
+        fulfillments = [found];
+      }
     }
   }
   if (fulfillments.length === 0) return [];

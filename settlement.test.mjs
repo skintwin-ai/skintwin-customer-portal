@@ -211,6 +211,7 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
     voidedInvoiceReturnCommands({
       id: "in_1",
       status: "void",
+      payment_intent: { id: "pi_1" },
       metadata: { fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-snake" },
     }),
     [
@@ -230,6 +231,8 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
   process.env.SKINTWIN_CHAIN_LEDGER = ledger;
   process.env.SKINTWIN_HUB_ROOT = hub;
   try {
+    assert.deepEqual(voidedInvoiceReturnCommands({ id: "in_intent", status: "void", payment_intent: "pi_1" }), []);
+    assert.deepEqual(voidedInvoiceReturnCommands({ id: "in_intent", status: "void", payment_intent: { id: "pi_1" } }), []);
     const skipped = recordInvoiceSettlement({ id: "in_plain", amount_paid: 18500, currency: "zar" });
     assert.equal(skipped.ok, true);
     assert.equal(skipped.recorded, false);
@@ -254,6 +257,8 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
           { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
           { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
           { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "fulfill", args: { fulfillment_id: "order-intent:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+          { command: "settle", args: { settlement_id: "pay-pi_1", fulfillment_id: "order-intent:0:sku-cleanser", amount_cents: 18500, currency: "ZAR" } },
         ],
       }),
       encoding: "utf8",
@@ -283,6 +288,7 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
     const missingReturn = acceptVoidedInvoiceReturn({
       id: "in_missing",
       status: "void",
+      payment_intent: "pi_1",
       metadata: { fulfillment_id: "missing-order" },
     });
     assert.equal(missingReturn.ok, false);
@@ -290,20 +296,36 @@ test("a paid invoice settles the fulfillment named in its metadata", () => {
     const absent = acceptVoidedInvoiceReturn({
       id: "in_1",
       status: "void",
+      payment_intent: { id: "pi_1" },
       metadata: { settlement_id: "pay-absent" },
     });
     assert.equal(absent.ok, true);
     assert.equal(absent.count, 0);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
-    const returned = acceptVoidedInvoiceReturn({ id: "in_1", status: "void" });
+    const returned = acceptVoidedInvoiceReturn({ id: "in_1", status: "void", payment_intent: "pi_1" });
     assert.equal(returned.ok, true, returned.error);
     assert.equal(returned.count, 1);
     const voided = readFileSync(ledger, "utf8");
     assert.match(voided, /return:in_1:order-9:0:sku-cleanser/);
+    assert.equal(voided.includes("return:in_1:order-intent"), false);
     assert.equal(voided.includes("return:to-cape-town"), false);
-    const voidAgain = acceptVoidedInvoiceReturn({ id: "in_1", status: "void" });
+    const voidAgain = acceptVoidedInvoiceReturn({ id: "in_1", status: "void", payment_intent: "pi_1" });
     assert.equal(voidAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), voided);
+    const missingIntent = acceptVoidedInvoiceReturn({ id: "in_absent", status: "void", payment_intent: "pi_missing" });
+    assert.equal(missingIntent.ok, true);
+    assert.equal(missingIntent.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), voided);
+    const fromIntent = acceptVoidedInvoiceReturn({ id: "in_intent", status: "void", payment_intent: "pi_1" });
+    assert.equal(fromIntent.ok, true, fromIntent.error);
+    assert.equal(fromIntent.count, 1);
+    const intentVoided = readFileSync(ledger, "utf8");
+    assert.match(intentVoided, /return:in_intent:order-intent:0:sku-cleanser/);
+    assert.equal(intentVoided.includes("return:in_intent:order-9"), false);
+    assert.equal(intentVoided.includes("return:to-cape-town"), false);
+    const intentAgain = acceptVoidedInvoiceReturn({ id: "in_intent", status: "void", payment_intent: { id: "pi_1" } });
+    assert.equal(intentAgain.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), intentVoided);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

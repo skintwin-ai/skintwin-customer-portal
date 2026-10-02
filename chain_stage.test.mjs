@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptBookingDelivery, acceptChargeReturn, acceptChargeStoredReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, chargeStoredSaleReturns, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, namedSale, orderSaleReturns, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptBookingCancellation, acceptBookingDelivery, bookingCancellationCommands, acceptChargeReturn, acceptChargeStoredReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, chargeStoredSaleReturns, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, namedSale, orderSaleReturns, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -2437,6 +2437,113 @@ test("a refunded charge returns the sale stored on its order once", () => {
     const again = acceptChargeStoredReturns(charge, "order-9", lines);
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("cancelling a completed booking sends that delivery back once", () => {
+  const absent = mkdtempSync(join(tmpdir(), "portal-booking-cancel-absent-"));
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = join(absent, "supply-chain.jsonl");
+  try {
+    assert.deepEqual(bookingCancellationCommands(9), []);
+    assert.equal(acceptBookingCancellation(" ").ok, false);
+    assert.equal(acceptBookingCancellation(9).count, 0);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "portal-booking-cancel-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const moved = acceptBookingDelivery("9", {
+      sku_id: "sku-cleanser",
+      batch_id: "batch-cleanser",
+      source: "plant",
+      destination: "cape-town",
+      milligrams: 2000,
+    });
+    assert.equal(moved.ok, true, moved.error);
+    const commands = bookingCancellationCommands("9");
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0].args.transfer_id, "return:booking:9");
+    assert.equal(commands[0].args.sku_id, "sku-cleanser");
+    assert.equal(commands[0].args.batch_id, "batch-cleanser");
+    assert.equal(commands[0].args.source, "cape-town");
+    assert.equal(commands[0].args.destination, "plant");
+    assert.equal(commands[0].args.milligrams, 2000);
+    const returned = acceptBookingCancellation("9");
+    assert.equal(returned.ok, true, returned.error);
+    assert.equal(returned.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /return:booking:9/);
+    const again = acceptBookingCancellation("9");
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+
+  const conflictDir = mkdtempSync(join(tmpdir(), "portal-booking-cancel-conflict-"));
+  const conflictLedger = join(conflictDir, "supply-chain.jsonl");
+  process.env.SKINTWIN_CHAIN_LEDGER = conflictLedger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "booking:9", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 2000 } },
+          { command: "transfer", args: { transfer_id: "return:booking:9", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "cape-town", destination: "plant", milligrams: 1000 } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const before = readFileSync(conflictLedger, "utf8");
+    assert.throws(() => bookingCancellationCommands("9"), /id already exists/);
+    const rejected = acceptBookingCancellation("9");
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /id already exists/);
+    assert.equal(readFileSync(conflictLedger, "utf8"), before);
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;

@@ -694,6 +694,52 @@ export function acceptBookingDelivery(bookingId, delivery) {
   return commitAll(commands);
 }
 
+function recordedTransfer(transferId) {
+  const raw = process.env.SKINTWIN_CHAIN_LEDGER;
+  if (!raw || !existsSync(raw)) return null;
+  let found = null;
+  for (const line of readFileSync(raw, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.command === "transfer" && record.args?.transfer_id === transferId) found = record.args;
+  }
+  return found;
+}
+
+function sameTransfer(prior, args) {
+  return ["sku_id", "batch_id", "source", "destination", "milligrams"].every((key) => prior[key] === args[key]);
+}
+
+export function bookingCancellationCommands(bookingId) {
+  const id = text(String(bookingId), "booking id");
+  const prior = recordedTransfer(`booking:${id}`);
+  if (!prior) return [];
+  const reverse = {
+    transfer_id: `return:booking:${id}`,
+    sku_id: prior.sku_id,
+    batch_id: prior.batch_id,
+    source: prior.destination,
+    destination: prior.source,
+    milligrams: prior.milligrams,
+  };
+  const existing = recordedTransfer(reverse.transfer_id);
+  if (!existing) return [{ command: "transfer", args: reverse }];
+  if (!sameTransfer(existing, reverse)) throw new Error("id already exists");
+  return [];
+}
+
+export function acceptBookingCancellation(bookingId) {
+  let commands;
+  try {
+    commands = bookingCancellationCommands(bookingId);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function handleStage(request) {
   const command = request?.command;
   const args = request?.args || {};

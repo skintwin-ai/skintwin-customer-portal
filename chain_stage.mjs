@@ -300,6 +300,10 @@ export function formulaIdFromShopify(product) {
   return null;
 }
 
+function catalogName(product) {
+  return text(namedField(product, "title", "name"), "name");
+}
+
 function namedCatalogSku(record) {
   for (const key of ["sku", "sku_id", "skuId"]) {
     const value = record?.[key];
@@ -344,7 +348,7 @@ export function shopifyCatalogCommands(products) {
     if (!product || typeof product !== "object") continue;
     const formulaId = formulaIdFromShopify(product);
     if (formulaId) {
-      const name = text(product.title || product.name, "name");
+      const name = catalogName(product);
       for (const sku of catalogSkus(product, name)) {
         const args = { sku_id: sku, formula_id: formulaId, name };
         catalogSku(args);
@@ -354,7 +358,7 @@ export function shopifyCatalogCommands(products) {
     }
     const named = variantFormulaSkus(product);
     if (!named.length) continue;
-    const name = text(product.title || product.name, "name");
+    const name = catalogName(product);
     for (const variant of named) {
       const args = { sku_id: variant.sku, formula_id: variant.formulaId, name };
       catalogSku(args);

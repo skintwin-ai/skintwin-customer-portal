@@ -770,6 +770,95 @@ test("a shopify product named by a blank formulaId records formula_id once", () 
   }
 });
 
+test("a shopify product named by a blank title records the product name once", () => {
+  const preferred = shopifyCatalogCommands([
+    {
+      title: "Vitamin C serum",
+      name: "Other",
+      formula_id: "serum-c",
+      variants: [{ sku: "sku-serum" }],
+    },
+  ]);
+  assert.equal(preferred[0].args.name, "Vitamin C serum");
+  const fallen = shopifyCatalogCommands([
+    {
+      title: "  ",
+      name: " Gentle cleanser ",
+      formula_id: "cleanser",
+      variants: [{ sku: " " }],
+    },
+  ]);
+  assert.equal(fallen[0].args.name, "Gentle cleanser");
+  assert.equal(fallen[0].args.sku_id, "Gentle cleanser");
+  const variant = shopifyCatalogCommands([
+    {
+      title: "  ",
+      name: "Gentle cleanser",
+      tags: "retail",
+      variants: [{ sku: "sku-variant", formula_id: "cleanser" }],
+    },
+  ]);
+  assert.equal(variant[0].args.name, "Gentle cleanser");
+  assert.equal(variant[0].args.sku_id, "sku-variant");
+  const dir = mkdtempSync(join(tmpdir(), "portal-title-blank-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const product = {
+    title: "  ",
+    name: "Gentle cleanser",
+    formula_id: "cleanser",
+    variants: [{ sku: "sku-cleanser" }],
+  };
+  try {
+    const missing = acceptShopifyCatalog([
+      { title: "  ", name: "  ", formula_id: "cleanser", variants: [{ sku: "sku-missing" }] },
+    ]);
+    assert.equal(missing.ok, false);
+    const plain = acceptShopifyCatalog([
+      { title: "  ", name: "Shelf", tags: "retail", variants: [{ sku: "sku-shelf" }] },
+    ]);
+    assert.equal(plain.ok, true);
+    assert.equal(plain.count, 0);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+          { command: "define_formula", args: { formula_id: "serum-c", name: "Vitamin C serum", lines: [["glycerin", 2000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const recorded = acceptShopifyCatalog([product]);
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.count, 1);
+    const text = readFileSync(ledger, "utf8");
+    assert.match(text, /Gentle cleanser/);
+    assert.match(text, /sku-cleanser/);
+    const again = acceptShopifyCatalog([product]);
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    const changed = acceptShopifyCatalog([{ ...product, formula_id: "serum-c" }]);
+    assert.equal(changed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a shopify catalog batch leaves nothing when a formula is unknown", () => {
   const dir = mkdtempSync(join(tmpdir(), "portal-shopify-"));
   const ledger = join(dir, "supply-chain.jsonl");

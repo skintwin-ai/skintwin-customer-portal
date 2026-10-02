@@ -277,8 +277,8 @@ export function catalogProduct(input) {
 
 export function formulaIdFromShopify(product) {
   if (!product || typeof product !== "object") return null;
-  const direct = product.formulaId ?? product.formula_id;
-  if (typeof direct === "string" && direct.trim() !== "") return direct.trim();
+  const direct = namedFormula(product);
+  if (direct) return direct;
   const metafields = Array.isArray(product.metafields) ? product.metafields : [];
   for (const field of metafields) {
     if (!field || (field.key !== "formula_id" && field.key !== "formulaId")) continue;

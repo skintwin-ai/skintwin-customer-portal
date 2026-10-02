@@ -523,6 +523,95 @@ test("a shopify formula tag becomes a catalog sku", () => {
   assert.equal(commands[0].args.name, "Vitamin C serum");
 });
 
+test("a shopify product named by a blank formulaId records formula_id once", () => {
+  assert.equal(formulaIdFromShopify({ formulaId: "serum-c", formula_id: "cleanser" }), "serum-c");
+  assert.equal(formulaIdFromShopify({ formulaId: "  ", formula_id: " cleanser " }), "cleanser");
+  assert.equal(formulaIdFromShopify({ formulaId: "  ", tags: "retail" }), null);
+  const preferred = shopifyCatalogCommands([
+    {
+      title: "Vitamin C serum",
+      formulaId: "serum-c",
+      formula_id: "cleanser",
+      variants: [{ sku: "sku-serum" }],
+    },
+  ]);
+  assert.equal(preferred[0].args.formula_id, "serum-c");
+  assert.equal(preferred[0].args.sku_id, "sku-serum");
+  const fallen = shopifyCatalogCommands([
+    {
+      title: "Gentle cleanser",
+      formulaId: "  ",
+      formula_id: "cleanser",
+      variants: [{ sku: "sku-cleanser" }],
+    },
+    { title: "Shelf", formulaId: "  ", tags: "retail", variants: [{ sku: "sku-plain" }] },
+    {
+      title: "Shelf",
+      tags: "retail",
+      variants: [{ sku: "sku-variant", formulaId: "  ", formula_id: "cleanser" }],
+    },
+  ]);
+  assert.deepEqual(
+    fallen.map((command) => [command.args.sku_id, command.args.formula_id]),
+    [
+      ["sku-cleanser", "cleanser"],
+      ["sku-variant", "cleanser"],
+    ],
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-formula-blank-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const product = {
+    title: "Gentle cleanser",
+    formulaId: "  ",
+    formula_id: "cleanser",
+    variants: [{ sku: "sku-cleanser" }],
+  };
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+          { command: "define_formula", args: { formula_id: "serum-c", name: "Vitamin C serum", lines: [["glycerin", 2000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const unnamed = acceptShopifyCatalog([{ title: "Shelf", formulaId: "  ", tags: "retail", variants: [{ sku: "sku-plain" }] }]);
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.count, 0);
+    const before = readFileSync(ledger, "utf8");
+    const recorded = acceptShopifyCatalog([product]);
+    assert.equal(recorded.ok, true);
+    assert.equal(recorded.count, 1);
+    const text = readFileSync(ledger, "utf8");
+    assert.match(text, /sku-cleanser/);
+    assert.equal(text.includes("sku-plain"), false);
+    const again = acceptShopifyCatalog([product]);
+    assert.equal(again.ok, true);
+    assert.equal(again.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    const renamed = acceptShopifyCatalog([{ ...product, formulaId: "serum-c", formula_id: "cleanser" }]);
+    assert.equal(renamed.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    assert.equal(before.includes("sku-cleanser"), false);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
 test("a shopify catalog batch leaves nothing when a formula is unknown", () => {
   const dir = mkdtempSync(join(tmpdir(), "portal-shopify-"));
   const ledger = join(dir, "supply-chain.jsonl");

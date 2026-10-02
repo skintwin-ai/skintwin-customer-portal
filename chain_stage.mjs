@@ -185,9 +185,48 @@ function chargeMetadata(charge, key) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function paymentIntentId(charge) {
+  const intent = charge?.payment_intent;
+  if (typeof intent === "string") return intent.trim();
+  if (!intent || typeof intent !== "object" || Array.isArray(intent)) return "";
+  return typeof intent.id === "string" ? intent.id.trim() : "";
+}
+
+function settledFulfillment(settlementId) {
+  if (!settlementId) return "";
+  const raw = process.env.SKINTWIN_CHAIN_LEDGER;
+  if (!raw || !existsSync(raw)) return "";
+  let found = "";
+  for (const line of readFileSync(raw, "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    const record = JSON.parse(line);
+    if (record.command !== "settle") continue;
+    const args = record.args || {};
+    if (args.settlement_id !== settlementId) continue;
+    const fulfillmentId = args.fulfillment_id;
+    if (typeof fulfillmentId !== "string" || !fulfillmentId) continue;
+    if (found && found !== fulfillmentId) return "";
+    found = fulfillmentId;
+  }
+  return found;
+}
+
+function chargeFulfillmentId(charge) {
+  const stated = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
+  if (stated) return stated;
+  const intent = charge?.payment_intent;
+  if (intent && typeof intent === "object" && !Array.isArray(intent)) {
+    const named = chargeMetadata(intent, "fulfillment_id") || chargeMetadata(intent, "fulfillmentId");
+    if (named) return named;
+  }
+  const intentId = paymentIntentId(charge);
+  if (!intentId) return "";
+  return settledFulfillment(`pay-${intentId}`);
+}
+
 export function chargeReturnCommands(charge) {
   if (!charge || typeof charge !== "object" || charge.refunded !== true) return [];
-  const fulfillmentId = chargeMetadata(charge, "fulfillment_id") || chargeMetadata(charge, "fulfillmentId");
+  const fulfillmentId = chargeFulfillmentId(charge);
   if (!fulfillmentId) return [];
   const chargeId = text(String(charge.id ?? ""), "charge");
   const returnId =

@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptShopifyCatalog, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -436,6 +436,10 @@ const productRouter = router({
       );
       
       const products = await shopify.getAllProducts();
+      const recorded = acceptShopifyCatalog(products);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       let synced = 0;
       
       for (const product of products) {

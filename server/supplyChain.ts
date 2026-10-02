@@ -1,8 +1,8 @@
-import { acceptOrderFulfillments, acceptTreatmentProducts, catalogProduct, handleStage, useSharedLedger } from "../chain_stage.mjs";
+import { acceptOrderFulfillments, acceptShopifyCatalog, acceptTreatmentProducts, catalogProduct, handleStage, useSharedLedger } from "../chain_stage.mjs";
 import { recordSkinOutcome } from "../outcome.mjs";
 import { recordSettlement } from "../settlement.mjs";
 
-export { acceptOrderFulfillments, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome };
+export { acceptOrderFulfillments, acceptShopifyCatalog, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome };
 
 export function acceptSupplyChainCommand(body: {
   command?: string;

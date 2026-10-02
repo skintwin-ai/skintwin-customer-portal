@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptOrderFulfillments, acceptTreatmentProducts, fulfillmentCommands, handleStage, loadChainLocate, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptOrderFulfillments, acceptShopifyCatalog, acceptTreatmentProducts, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, shopifyCatalogCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -149,5 +149,67 @@ test("treatment products against an empty ledger are rejected", () => {
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+  }
+});
+
+test("a shopify product without a formula tag is not a catalog sku", () => {
+  assert.equal(formulaIdFromShopify({ title: "Cleanser", tags: "retail, cleanser" }), null);
+  const commands = shopifyCatalogCommands([
+    { title: "Cleanser", tags: "retail", variants: [{ sku: "sku-cleanser" }] },
+  ]);
+  assert.equal(commands.length, 0);
+  const skipped = acceptShopifyCatalog([{ title: "Cleanser", tags: "retail" }]);
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.count, 0);
+});
+
+test("a shopify formula tag becomes a catalog sku", () => {
+  const commands = shopifyCatalogCommands([
+    {
+      title: "Vitamin C serum",
+      tags: "retail, Formula:serum-c",
+      variants: [{ sku: "sku-serum-c" }],
+    },
+  ]);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args.formula_id, "serum-c");
+  assert.equal(commands[0].args.sku_id, "sku-serum-c");
+  assert.equal(commands[0].args.name, "Vitamin C serum");
+});
+
+test("a shopify catalog batch leaves nothing when a formula is unknown", () => {
+  const dir = mkdtempSync(join(tmpdir(), "portal-shopify-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+    cwd: hub,
+    input: JSON.stringify({
+      commands: [
+        { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+        { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 8000]] } },
+      ],
+    }),
+    encoding: "utf8",
+  });
+  assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+  const before = readFileSync(ledger, "utf8");
+  try {
+    const result = acceptShopifyCatalog([
+      { title: "Gentle cleanser", tags: "formula:cleanser", variants: [{ sku: "sku-cleanser" }] },
+      { title: "Unknown", tags: "formula:missing", variants: [{ sku: "sku-missing" }] },
+    ]);
+    assert.equal(result.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), before);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });

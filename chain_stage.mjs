@@ -136,6 +136,58 @@ export function catalogProduct(input) {
   });
 }
 
+export function formulaIdFromShopify(product) {
+  if (!product || typeof product !== "object") return null;
+  const direct = product.formulaId ?? product.formula_id;
+  if (typeof direct === "string" && direct.trim() !== "") return direct.trim();
+  const metafields = Array.isArray(product.metafields) ? product.metafields : [];
+  for (const field of metafields) {
+    if (!field || (field.key !== "formula_id" && field.key !== "formulaId")) continue;
+    if (typeof field.value === "string" && field.value.trim() !== "") return field.value.trim();
+  }
+  const tags = Array.isArray(product.tags)
+    ? product.tags
+    : typeof product.tags === "string"
+      ? product.tags.split(",")
+      : [];
+  for (const tag of tags) {
+    const value = String(tag).trim();
+    const marker = "formula:";
+    if (value.toLowerCase().startsWith(marker)) {
+      const formula = value.slice(marker.length).trim();
+      if (formula) return formula;
+    }
+  }
+  return null;
+}
+
+export function shopifyCatalogCommands(products) {
+  if (!Array.isArray(products)) throw new Error("products are required");
+  const commands = [];
+  for (const product of products) {
+    const formulaId = formulaIdFromShopify(product);
+    if (!formulaId) continue;
+    const name = text(product.title || product.name, "name");
+    const sku = text(product.variants?.[0]?.sku || product.sku || name, "sku");
+    const args = { sku_id: sku, formula_id: formulaId, name };
+    catalogSku(args);
+    commands.push({ command: "catalog_sku", args });
+  }
+  return commands;
+}
+
+export function acceptShopifyCatalog(products) {
+  let commands;
+  try {
+    commands = shopifyCatalogCommands(products);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 export function acceptOrderFulfillments(orderNumber, items, therapistId) {
   let commands;
   try {

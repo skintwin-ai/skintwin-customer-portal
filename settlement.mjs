@@ -64,11 +64,15 @@ function minorUnits(value) {
   return null;
 }
 
+function countedCents(value) {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return value;
+}
+
 function intentCents(intent) {
-  const received = intent?.amount_received;
+  const received = countedCents(intent?.amount_received);
   if (Number.isInteger(received) && received >= 1) return received;
-  const amount = intent?.amount;
-  if (typeof amount === "string" && /^\d+$/.test(amount.trim())) return Number(amount.trim());
+  const amount = countedCents(intent?.amount);
   if (Number.isInteger(amount) && amount >= 1) return amount;
   throw new Error("amount must be a positive integer");
 }

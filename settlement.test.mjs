@@ -766,3 +766,101 @@ test("a named sale with a blank currency records the next currency once", () => 
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a payment intent named by a numeric captured amount settles that sale once", () => {
+  const metadata = { fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-captured" };
+  const captured = succeededPaymentIntentSettlement({
+    id: "pi_text",
+    amount: 100,
+    amount_received: " 18500 ",
+    currency: "usd",
+    metadata,
+  });
+  assert.equal(settlementCommand(captured).args.amount_cents, 18500);
+  const fallen = succeededPaymentIntentSettlement({
+    id: "pi_word",
+    amount: "18500",
+    amount_received: "lots",
+    currency: "usd",
+    metadata,
+  });
+  assert.equal(settlementCommand(fallen).args.amount_cents, 18500);
+  assert.equal(succeededPaymentIntentSettlement({ id: "pi_plain", amount_received: "18500", currency: "usd" }), null);
+  assert.throws(
+    () => succeededPaymentIntentSettlement({
+      id: "pi_bad",
+      amount: "lots",
+      amount_received: "none",
+      currency: "usd",
+      metadata,
+    }),
+    /amount must be a positive integer/,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-intent-count-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = recordPaymentIntentSettlement({ id: "pi_plain", amount_received: "18500", currency: "usd" });
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const seededText = readFileSync(ledger, "utf8");
+    const word = recordPaymentIntentSettlement({
+      id: "pi_bad",
+      amount: "lots",
+      amount_received: "none",
+      currency: "usd",
+      metadata,
+    });
+    assert.equal(word.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), seededText);
+    const paid = recordPaymentIntentSettlement({
+      id: "pi_text",
+      amount: 100,
+      amount_received: "18500",
+      currency: "usd",
+      metadata,
+    });
+    assert.equal(paid.ok, true, paid.error);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /"amount_cents": 18500/);
+    assert.match(recorded, /pay-captured/);
+    const again = recordPaymentIntentSettlement({
+      id: "pi_again",
+      amount_received: "18500",
+      currency: "usd",
+      metadata,
+    });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

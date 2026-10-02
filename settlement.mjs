@@ -25,6 +25,66 @@ function amountCents(payment) {
   return cents;
 }
 
+function named(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function metadataObject(value) {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function minorUnits(value) {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) value = Number(value.trim());
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const cents = Number.isInteger(value) ? value : Math.round(value);
+    if (cents >= 1) return cents;
+  }
+  return null;
+}
+
+export function paystackInitializeMetadata(input = {}) {
+  const metadata = {};
+  if (input.userId != null) metadata.userId = input.userId;
+  if (input.orderId != null) metadata.orderId = input.orderId;
+  const fulfillmentId = named(input.fulfillmentId ?? input.fulfillment_id);
+  if (fulfillmentId) metadata.fulfillment_id = fulfillmentId;
+  const settlementId = named(input.settlementId ?? input.settlement_id);
+  if (settlementId) metadata.settlement_id = settlementId;
+  return metadata;
+}
+
+export function verifiedPaystackSettlement(transaction, overrides = {}) {
+  if (!transaction || typeof transaction !== "object") return null;
+  const data = transaction.data && typeof transaction.data === "object" ? transaction.data : transaction;
+  if (data.status !== "success") return null;
+  const metadata = metadataObject(data.metadata);
+  const fulfillmentId =
+    named(overrides.fulfillmentId ?? overrides.fulfillment_id) ||
+    named(metadata.fulfillment_id) ||
+    named(metadata.fulfillmentId);
+  if (!fulfillmentId) return null;
+  const reference = named(data.reference) || (data.id == null ? fulfillmentId : String(data.id));
+  const settlementId =
+    named(overrides.settlementId ?? overrides.settlement_id) ||
+    named(metadata.settlement_id) ||
+    named(metadata.settlementId) ||
+    `pay-${reference}`;
+  const currency = overrides.currency || data.currency || "NGN";
+  if (overrides.amount != null) {
+    return { settlementId, fulfillmentId, amount: overrides.amount, currency };
+  }
+  const cents = minorUnits(data.amount);
+  if (cents == null) return null;
+  return { settlementId, fulfillmentId, amountCents: cents, currency };
+}
+
 export function settlementCommand(payment) {
   if (!payment || typeof payment !== "object" || Array.isArray(payment)) return null;
   const fulfillmentId = payment.fulfillmentId ?? payment.fulfillment_id;

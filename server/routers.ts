@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -637,6 +637,8 @@ const paymentRouter = router({
       currency: z.string().default('NGN'),
       email: z.string().email(),
       callbackUrl: z.string(),
+      fulfillmentId: z.string().optional(),
+      settlementId: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
@@ -647,10 +649,12 @@ const paymentRouter = router({
         amount: Math.round(input.amount * 100),
         currency: input.currency,
         callback_url: input.callbackUrl,
-        metadata: {
+        metadata: paystackInitializeMetadata({
           userId: ctx.user.id,
           orderId: input.orderId,
-        },
+          fulfillmentId: input.fulfillmentId,
+          settlementId: input.settlementId,
+        }),
       });
       
       const paymentId = await db.createPayment({
@@ -686,13 +690,14 @@ const paymentRouter = router({
       const transaction = await paystack.verifyTransaction(input.reference);
       
       const payment = await db.getPaymentByProcessorId(input.reference);
-      if (transaction.status === 'success' && input.fulfillmentId) {
-        const recorded = recordSettlement({
-          settlementId: input.settlementId,
-          fulfillmentId: input.fulfillmentId,
-          amount: input.amount ?? Number(payment?.amount),
-          currency: input.currency || payment?.currency,
-        });
+      const settlement = verifiedPaystackSettlement(transaction, {
+        fulfillmentId: input.fulfillmentId,
+        settlementId: input.settlementId,
+        amount: input.amount != null ? input.amount : input.fulfillmentId ? Number(payment?.amount) : undefined,
+        currency: input.currency || payment?.currency,
+      });
+      if (settlement) {
+        const recorded = recordSettlement(settlement);
         if (!recorded.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
         }

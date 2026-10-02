@@ -254,15 +254,41 @@ function catalogSkus(product, name) {
   return [text(product.sku || name, "sku")];
 }
 
+function variantFormulaSkus(product) {
+  const variants = Array.isArray(product?.variants) ? product.variants : [];
+  const named = [];
+  const seen = new Set();
+  for (const variant of variants) {
+    const sku = typeof variant?.sku === "string" ? variant.sku.trim() : "";
+    if (!sku || seen.has(sku)) continue;
+    const formulaId = formulaIdFromShopify(variant);
+    if (!formulaId) continue;
+    seen.add(sku);
+    named.push({ sku, formulaId });
+  }
+  return named;
+}
+
 export function shopifyCatalogCommands(products) {
   if (!Array.isArray(products)) throw new Error("products are required");
   const commands = [];
   for (const product of products) {
+    if (!product || typeof product !== "object") continue;
     const formulaId = formulaIdFromShopify(product);
-    if (!formulaId) continue;
+    if (formulaId) {
+      const name = text(product.title || product.name, "name");
+      for (const sku of catalogSkus(product, name)) {
+        const args = { sku_id: sku, formula_id: formulaId, name };
+        catalogSku(args);
+        commands.push({ command: "catalog_sku", args });
+      }
+      continue;
+    }
+    const named = variantFormulaSkus(product);
+    if (!named.length) continue;
     const name = text(product.title || product.name, "name");
-    for (const sku of catalogSkus(product, name)) {
-      const args = { sku_id: sku, formula_id: formulaId, name };
+    for (const variant of named) {
+      const args = { sku_id: variant.sku, formula_id: variant.formulaId, name };
       catalogSku(args);
       commands.push({ command: "catalog_sku", args });
     }

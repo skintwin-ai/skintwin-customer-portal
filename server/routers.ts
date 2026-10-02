@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordOrderSaleSettlements, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -761,9 +761,16 @@ const paymentRouter = router({
     }))
     .mutation(async ({ input }) => {
       const sale = namedSale(input);
-      if (input.status === "succeeded" && sale.fulfillmentId) {
-        const stored = await db.getPayment(input.id);
-        const recorded = recordSettlement(paymentForSettlement(input, stored));
+      if (input.status === "succeeded") {
+        const storedPayment = await db.getPayment(input.id);
+        const prepared = paymentForSettlement(input, storedPayment);
+        const recorded = sale.fulfillmentId
+          ? recordSettlement(prepared)
+          : recordOrderSaleSettlements(
+            storedPayment?.orderId ? (await db.getOrderById(storedPayment.orderId))?.orderNumber : undefined,
+            storedPayment?.orderId ? await db.getOrderItems(storedPayment.orderId) : [],
+            prepared,
+          );
         if (!recorded.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
         }

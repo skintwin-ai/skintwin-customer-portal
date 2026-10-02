@@ -314,6 +314,54 @@ export function paymentForSettlement(input, stored) {
   return payment;
 }
 
+function lineSku(item) {
+  if (typeof item?.sku === "string" && item.sku.trim() !== "") return item.sku.trim();
+  if (typeof item?.sku_id === "string" && item.sku_id.trim() !== "") return item.sku_id.trim();
+  if (typeof item?.skuId === "string" && item.skuId.trim() !== "") return item.skuId.trim();
+  return "";
+}
+
+function linesInDrawOrder(items) {
+  if (items.every((item) => item && Number.isInteger(item.id))) {
+    return [...items].sort((left, right) => left.id - right.id);
+  }
+  return items;
+}
+
+export function orderSaleSettlements(orderNumber, items, payment) {
+  const orderId = typeof orderNumber === "string" ? orderNumber.trim() : "";
+  if (!orderId || !Array.isArray(items) || !payment || typeof payment !== "object" || Array.isArray(payment)) {
+    return [];
+  }
+  const currency = namedCurrency(payment.currency) || "USD";
+  const paymentKey = payment.id == null || String(payment.id).trim() === "" ? orderId : String(payment.id).trim();
+  const explicit = namedSale(payment).settlementId;
+  const sales = [];
+  linesInDrawOrder(items).forEach((item, index) => {
+    const type = item?.type || "product";
+    const sku = lineSku(item);
+    if (type === "service" || !sku) return;
+    if (type !== "product" && type !== "treatment") return;
+    const amount = item?.total;
+    if (amount == null || (typeof amount === "string" && amount.trim() === "")) {
+      throw new Error("amount_cents is required");
+    }
+    amountCents({ amount });
+    sales.push({
+      fulfillmentId: `${orderId}:${index}:${sku}`,
+      amount,
+      index,
+    });
+  });
+  return sales.map((sale) => ({
+    id: payment.id,
+    settlementId: sales.length === 1 && explicit ? explicit : `pay-${paymentKey}:${sale.index}:${sale.fulfillmentId}`,
+    fulfillmentId: sale.fulfillmentId,
+    amount: sale.amount,
+    currency,
+  }));
+}
+
 export function settlementCommand(payment) {
   if (!payment || typeof payment !== "object" || Array.isArray(payment)) return null;
   const sale = namedSale(payment);
@@ -356,4 +404,15 @@ export function recordSettlement(payment) {
     return { ok: false, error: payload.error || child.stderr || "settlement rejected" };
   }
   return { ok: true, recorded: true };
+}
+
+export function recordOrderSaleSettlements(orderNumber, items, payment) {
+  try {
+    const settlements = orderSaleSettlements(orderNumber, items, payment);
+    if (settlements.length === 0) return { ok: true, recorded: false };
+    if (settlements.length === 1) return recordSettlement(settlements[0]);
+    return recordSettlements(settlements);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
 }

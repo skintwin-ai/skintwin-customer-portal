@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptBookingDelivery, acceptChargeReturn, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, chargeReturnCommands, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptBookingDelivery, acceptChargeReturn, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -12,6 +12,65 @@ test("catalog command accepts a finished sku", () => {
     args: { sku_id: "sku-serum-c", formula_id: "serum-c", name: "Vitamin C serum" },
   });
   assert.equal(result.ok, true);
+});
+
+test("a product named by formula_id is catalogued once", () => {
+  const skipped = catalogProduct({ name: "Gentle cleanser", sku: "sku-cleanser", formula_id: " " });
+  assert.equal(skipped.ok, true);
+  assert.equal(skipped.recorded, false);
+  const dir = mkdtempSync(join(tmpdir(), "portal-formula-id-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = catalogProduct({ name: "Shelf", sku: "sku-shelf" });
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "define_formula", args: { formula_id: "serum-c", name: "Vitamin C serum", lines: [["glycerin", 2000]] } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const recorded = catalogProduct({ name: "Gentle cleanser", sku: "sku-cleanser", formula_id: " cleanser " });
+    assert.equal(recorded.ok, true);
+    const preferred = catalogProduct({
+      name: "Vitamin C serum",
+      sku: "sku-serum",
+      formulaId: "serum-c",
+      formula_id: "cleanser",
+    });
+    assert.equal(preferred.ok, true);
+    const text = readFileSync(ledger, "utf8");
+    const catalogs = text.trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.command === "catalog_sku");
+    assert.deepEqual(catalogs.map((row) => [row.args.sku_id, row.args.formula_id]), [
+      ["sku-cleanser", "cleanser"],
+      ["sku-serum", "serum-c"],
+    ]);
+    const again = catalogProduct({ name: "Gentle cleanser", sku: "sku-cleanser", formula_id: "cleanser" });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+    const missing = catalogProduct({ name: "Missing", sku: "sku-missing", formula_id: "missing" });
+    assert.equal(missing.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), text);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
 });
 
 test("a product order draws stock and a service line does not", () => {

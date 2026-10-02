@@ -398,6 +398,7 @@ const productRouter = router({
       description: z.string().optional(),
       sku: z.string().optional(),
       formulaId: z.string().optional(),
+      formula_id: z.string().optional(),
       price: z.string(),
       costPrice: z.string().optional(),
       category: z.string().optional(),
@@ -405,17 +406,18 @@ const productRouter = router({
       inventory: z.number().default(0),
     }))
     .mutation(async ({ input }) => {
-      if (input.formulaId) {
+      const formulaId = input.formulaId?.trim() || input.formula_id?.trim();
+      if (formulaId) {
         const accepted = catalogProduct({
           sku: input.sku,
           name: input.name,
-          formulaId: input.formulaId,
+          formulaId,
         });
         if (!accepted.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
         }
       }
-      const { formulaId: _formulaId, ...product } = input;
+      const { formulaId: _formulaId, formula_id: _formulaSnake, ...product } = input;
       const id = await db.createProduct(product);
       return { id };
     }),

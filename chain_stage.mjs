@@ -216,14 +216,21 @@ export function fulfillmentCommands(orderNumber, items, therapistId) {
   return commands;
 }
 
+function namedFormula(input) {
+  if (typeof input?.formulaId === "string" && input.formulaId.trim() !== "") return input.formulaId.trim();
+  if (typeof input?.formula_id === "string" && input.formula_id.trim() !== "") return input.formula_id.trim();
+  return "";
+}
+
 export function catalogProduct(input) {
-  if (!input?.formulaId) return { ok: true, recorded: false };
+  const formulaId = namedFormula(input);
+  if (!formulaId) return { ok: true, recorded: false };
   if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
   return handleStage({
     command: "catalog_sku",
     args: {
       sku_id: input.sku || input.name,
-      formula_id: input.formulaId,
+      formula_id: formulaId,
       name: input.name,
     },
   });

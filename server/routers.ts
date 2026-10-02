@@ -980,14 +980,22 @@ const supplierRouter = router({
       address: z.string().optional(),
       erpnextSupplierId: z.string().optional(),
       ingredientId: z.string().optional(),
+      ingredient_id: z.string().optional(),
       qualificationId: z.string().optional(),
+      qualification_id: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
       const accepted = acceptSupplierQualification(input);
       if (!accepted.ok) {
         throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
       }
-      const { ingredientId: _ingredientId, qualificationId: _qualificationId, ...supplier } = input;
+      const {
+        ingredientId: _ingredientId,
+        ingredient_id: _ingredientSnake,
+        qualificationId: _qualificationId,
+        qualification_id: _qualificationSnake,
+        ...supplier
+      } = input;
       const id = await db.createSupplier(supplier);
       return { id };
     }),
@@ -1042,13 +1050,19 @@ const purchaseOrderRouter = router({
       status: z.enum(['draft', 'submitted', 'approved', 'received', 'cancelled']),
       receipts: z.array(z.object({
         ingredientId: z.string().optional(),
+        ingredient_id: z.string().optional(),
         qualificationId: z.string().optional(),
+        qualification_id: z.string().optional(),
         lotId: z.string().optional(),
+        lot_id: z.string().optional(),
         milligrams: z.number().int().positive().optional(),
         quantityKg: z.number().positive().optional(),
+        quantity_kg: z.number().positive().optional(),
         componentId: z.string().optional(),
+        component_id: z.string().optional(),
         name: z.string().optional(),
         supplierName: z.string().optional(),
+        supplier_name: z.string().optional(),
         pieces: z.number().int().positive().optional(),
       })).optional(),
     }))

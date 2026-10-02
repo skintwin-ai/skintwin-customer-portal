@@ -137,6 +137,47 @@ export function acceptPaymentReturn(payment) {
   return commitAll(commands);
 }
 
+function linesInDrawOrder(items) {
+  if (items.every((item) => item && Number.isInteger(item.id))) {
+    return [...items].sort((left, right) => left.id - right.id);
+  }
+  return items;
+}
+
+export function orderSaleReturns(orderNumber, items, returnKey) {
+  const orderId = typeof orderNumber === "string" ? orderNumber.trim() : "";
+  if (!orderId || !Array.isArray(items)) return [];
+  const key = returnKey == null || String(returnKey).trim() === "" ? orderId : String(returnKey).trim();
+  const commands = [];
+  linesInDrawOrder(items).forEach((item, index) => {
+    const type = item?.type || "product";
+    const sku = namedSku(item);
+    if (type === "service" || !sku) return;
+    if (type !== "product" && type !== "treatment") return;
+    const fulfillmentId = `${orderId}:${index}:${sku}`;
+    commands.push({
+      command: "return_sale",
+      args: returnSale({
+        return_id: `return:${key}:${fulfillmentId}`,
+        fulfillment_id: fulfillmentId,
+      }),
+    });
+  });
+  return commands;
+}
+
+export function acceptOrderSaleReturns(orderNumber, items, returnKey) {
+  let commands;
+  try {
+    commands = orderSaleReturns(orderNumber, items, returnKey);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (commands.length === 0) return { ok: true, count: 0 };
+  if (!useSharedLedger()) return { ok: false, error: "supply-chain hub is not present" };
+  return commitAll(commands);
+}
+
 function chargeMetadata(charge, key) {
   const metadata = charge?.metadata;
   if (!metadata || typeof metadata !== "object") return "";

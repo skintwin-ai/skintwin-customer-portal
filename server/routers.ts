@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -556,11 +556,17 @@ const orderRouter = router({
     }))
     .mutation(async ({ input }) => {
       const sale = namedSale(input);
-      if ((input.status === "refunded" || input.status === "cancelled") && sale.fulfillmentId) {
-        const returned = acceptSaleReturn(
-          sale.returnId || `return:${input.id}:${sale.fulfillmentId}`,
-          sale.fulfillmentId,
-        );
+      if (input.status === "refunded" || input.status === "cancelled") {
+        const returned = sale.fulfillmentId
+          ? acceptSaleReturn(
+            sale.returnId || `return:${input.id}:${sale.fulfillmentId}`,
+            sale.fulfillmentId,
+          )
+          : acceptOrderSaleReturns(
+            (await db.getOrderById(input.id))?.orderNumber,
+            await db.getOrderItems(input.id),
+            input.id,
+          );
         if (!returned.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
         }
@@ -763,7 +769,18 @@ const paymentRouter = router({
         }
       }
       if (input.status === "refunded") {
-        const returned = acceptPaymentReturn(input);
+        let returned;
+        if (sale.fulfillmentId) {
+          returned = acceptPaymentReturn(input);
+        } else {
+          const stored = await db.getPayment(input.id);
+          const order = stored?.orderId ? await db.getOrderById(stored.orderId) : undefined;
+          returned = acceptOrderSaleReturns(
+            order?.orderNumber,
+            order ? await db.getOrderItems(order.id) : [],
+            input.id,
+          );
+        }
         if (!returned.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
         }

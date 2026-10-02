@@ -98,6 +98,32 @@ export function recordPaymentIntentSettlement(intent) {
   return recordSettlement(settlement);
 }
 
+export function paidInvoiceSettlement(invoice) {
+  if (!invoice || typeof invoice !== "object") throw new Error("invoice is required");
+  const metadata = metadataObject(invoice.metadata);
+  const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
+  if (!fulfillmentId) return null;
+  const currency = String(invoice.currency || "USD").trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
+  const invoiceId = named(invoice.id) || fulfillmentId;
+  const settlementId =
+    named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${invoiceId}`;
+  const cents = minorUnits(invoice.amount_paid);
+  if (cents == null) throw new Error("amount must be a positive integer");
+  return { settlementId, fulfillmentId, amountCents: cents, currency };
+}
+
+export function recordInvoiceSettlement(invoice) {
+  let settlement;
+  try {
+    settlement = paidInvoiceSettlement(invoice);
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+  if (!settlement) return { ok: true, recorded: false };
+  return recordSettlement(settlement);
+}
+
 export function paystackInitializeMetadata(input = {}) {
   const metadata = {};
   if (input.userId != null) metadata.userId = input.userId;

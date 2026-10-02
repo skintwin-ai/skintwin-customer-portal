@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { paymentIntentMetadata, paystackInitializeMetadata, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
+import { loadChainLocate } from "./chain_stage.mjs";
+import { paidInvoiceSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordInvoiceSettlement, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
 
 test("a payment without a fulfillment is not a settlement", () => {
   assert.equal(settlementCommand({ amount: 185, currency: "ZAR" }), null);
@@ -88,6 +90,84 @@ test("a succeeded payment intent settles the fulfillment named in its metadata",
   } finally {
     if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
     else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+  }
+});
+
+test("a paid invoice settles the fulfillment named in its metadata", () => {
+  assert.equal(paidInvoiceSettlement({ id: "in_plain", amount_paid: 18500, currency: "zar" }), null);
+  const payment = paidInvoiceSettlement({
+    id: "in_1",
+    amount_paid: 18500,
+    currency: "zar",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-in_named" },
+  });
+  const command = settlementCommand(payment);
+  assert.equal(command.args.settlement_id, "pay-in_named");
+  assert.equal(command.args.fulfillment_id, "order-9:0:sku-cleanser");
+  assert.equal(command.args.amount_cents, 18500);
+  assert.equal(command.args.currency, "ZAR");
+  const dir = mkdtempSync(join(tmpdir(), "portal-invoice-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const skipped = recordInvoiceSettlement({ id: "in_plain", amount_paid: 18500, currency: "zar" });
+    assert.equal(skipped.ok, true);
+    assert.equal(skipped.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const missing = recordInvoiceSettlement({
+      id: "in_missing",
+      amount_paid: 18500,
+      currency: "zar",
+      metadata: { fulfillment_id: "missing-order" },
+    });
+    assert.equal(missing.ok, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const paid = recordInvoiceSettlement({
+      id: "in_1",
+      amount_paid: 18500,
+      currency: "zar",
+      metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+    });
+    assert.equal(paid.ok, true);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /pay-in_1/);
+    const again = recordInvoiceSettlement({
+      id: "in_1",
+      amount_paid: 18500,
+      currency: "zar",
+      metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+    });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
 

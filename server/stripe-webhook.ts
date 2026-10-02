@@ -2,7 +2,7 @@ import express, { Request, Response, Router } from "express";
 import type Stripe from "stripe";
 import * as db from "./db";
 import { constructWebhookEvent } from "./integrations/stripe";
-import { recordPaymentIntentSettlement, acceptChargeReturn } from "./supplyChain";
+import { recordPaymentIntentSettlement, recordInvoiceSettlement, acceptChargeReturn } from "./supplyChain";
 
 export function createStripeWebhookRouter(): Router {
   const router = Router();
@@ -35,6 +35,8 @@ export function createStripeWebhookRouter(): Router {
           await handlePaymentIntentFailed(event.data.object as Stripe.PaymentIntent);
         } else if (event.type === "charge.refunded") {
           await handleChargeRefunded(event.data.object as Stripe.Charge);
+        } else if (event.type === "invoice.paid") {
+          await handleInvoicePaid(event.data.object as Stripe.Invoice);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "webhook failed";
@@ -67,6 +69,13 @@ async function handlePaymentIntentFailed(paymentIntent: Stripe.PaymentIntent) {
   const payment = await db.getPaymentByProcessorId(paymentIntent.id);
   if (payment) {
     await db.updatePayment(payment.id, { status: "failed" });
+  }
+}
+
+async function handleInvoicePaid(invoice: Stripe.Invoice) {
+  const settled = recordInvoiceSettlement(invoice);
+  if (!settled.ok) {
+    throw new Error(settled.error);
   }
 }
 

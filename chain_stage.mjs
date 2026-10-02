@@ -64,6 +64,7 @@ function text(value, label) {
 }
 
 function positive(value, label) {
+  value = wholeCount(value);
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
@@ -658,7 +659,7 @@ function commitStage(request, result) {
   if (!ledger) return result;
   const locate = loadChainLocate();
   if (!locate) return { ok: false, error: "supply-chain hub is not present" };
-  const committed = locate.commitCommand(request);
+  const committed = locate.commitCommand({ command: request.command, args: result.artifact });
   return committed.ok ? result : committed;
 }
 

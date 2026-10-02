@@ -2192,3 +2192,100 @@ test("a booking named by a numeric string moves that batch once", () => {
     else process.env.SKINTWIN_HUB_ROOT = previousHub;
   }
 });
+
+test("a sale command named by a numeric string draws that sale once", () => {
+  const drawn = handleStage({
+    command: "fulfill",
+    args: {
+      fulfillment_id: "order-text",
+      sku_id: "sku-cleanser",
+      location: "cape-town",
+      milligrams: " 2000 ",
+      kind: "retail",
+    },
+  });
+  assert.equal(drawn.ok, true);
+  assert.equal(drawn.artifact.milligrams, 2000);
+  const rejected = handleStage({
+    command: "fulfill",
+    args: {
+      fulfillment_id: "order-word",
+      sku_id: "sku-cleanser",
+      location: "cape-town",
+      milligrams: "lots",
+      kind: "retail",
+    },
+  });
+  assert.equal(rejected.ok, false);
+  assert.match(rejected.error, /milligrams must be a positive integer/);
+  const dir = mkdtempSync(join(tmpdir(), "portal-sale-count-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  const sale = {
+    command: "fulfill",
+    args: {
+      fulfillment_id: "order-text",
+      sku_id: "sku-cleanser",
+      location: "cape-town",
+      milligrams: " 2000 ",
+      kind: "retail",
+    },
+  };
+  try {
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "xfer-cape-town:0", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const seededText = readFileSync(ledger, "utf8");
+    const missing = handleStage({
+      command: "fulfill",
+      args: { fulfillment_id: "order-missing", sku_id: "sku-cleanser", location: "cape-town", kind: "retail" },
+    });
+    assert.equal(missing.ok, false);
+    const word = handleStage({
+      command: "fulfill",
+      args: {
+        fulfillment_id: "order-word",
+        sku_id: "sku-cleanser",
+        location: "cape-town",
+        milligrams: "lots",
+        kind: "retail",
+      },
+    });
+    assert.equal(word.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), seededText);
+    const sold = handleStage(sale);
+    assert.equal(sold.ok, true, sold.error);
+    assert.equal(sold.artifact.milligrams, 2000);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /"fulfillment_id": "order-text"/);
+    assert.match(recorded, /"milligrams": 2000/);
+    assert.equal(recorded.includes('"milligrams": "'), false);
+    const again = handleStage(sale);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

@@ -297,6 +297,23 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
   return { settlementId, fulfillmentId, amountCents: cents, currency };
 }
 
+function presentAmount(value) {
+  if (value == null) return false;
+  if (typeof value === "string" && value.trim() === "") return false;
+  return true;
+}
+
+export function paymentForSettlement(input, stored) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const payment = { ...input };
+  if (!presentAmount(payment.amount) && presentAmount(stored?.amount)) payment.amount = stored.amount;
+  if (!namedCurrency(payment.currency) && namedCurrency(stored?.currency)) payment.currency = stored.currency;
+  if (!namedSale(payment).settlementId && payment.id != null && String(payment.id).trim() !== "") {
+    payment.settlementId = `pay-${payment.id}`;
+  }
+  return payment;
+}
+
 export function settlementCommand(payment) {
   if (!payment || typeof payment !== "object" || Array.isArray(payment)) return null;
   const sale = namedSale(payment);

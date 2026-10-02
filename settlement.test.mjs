@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { loadChainLocate } from "./chain_stage.mjs";
-import { completedCheckoutSettlement, paidInvoiceLineSettlements, paidInvoiceSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordCheckoutSettlement, recordInvoiceSettlement, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
+import { completedCheckoutSettlement, paidInvoiceLineSettlements, paidInvoiceSettlement, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordCheckoutSettlement, recordInvoiceSettlement, recordPaymentIntentSettlement, recordSettlement, settlementCommand, succeededPaymentIntentSettlement, verifiedPaystackSettlement } from "./settlement.mjs";
 
 test("a payment without a fulfillment is not a settlement", () => {
   assert.equal(settlementCommand({ amount: 185, currency: "ZAR" }), null);
@@ -755,7 +755,7 @@ test("a named sale with a blank currency records the next currency once", () => 
     assert.equal(paid.recorded, true);
     const recorded = readFileSync(ledger, "utf8");
     assert.match(recorded, /pay-ref-zar/);
-    assert.match(recorded, /"currency": "zar"/);
+    assert.match(recorded, /"currency": "ZAR"/);
     const again = recordSettlement(fallen);
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
@@ -855,6 +855,73 @@ test("a payment intent named by a numeric captured amount settles that sale once
       currency: "usd",
       metadata,
     });
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("a succeeded payment settles the amount stored on that payment once", () => {
+  const stored = { amount: " 185.00 ", currency: "zar" };
+  const update = { id: 42, status: "succeeded", fulfillmentId: "order-9:0:sku-cleanser" };
+  const named = settlementCommand(paymentForSettlement(update, stored));
+  assert.equal(named.args.settlement_id, "pay-42");
+  assert.equal(named.args.amount_cents, 18500);
+  assert.equal(named.args.currency, "zar");
+  const preferred = settlementCommand(paymentForSettlement({ ...update, amount: 10, settlementId: "pay-stated" }, stored));
+  assert.equal(preferred.args.settlement_id, "pay-stated");
+  assert.equal(preferred.args.amount_cents, 1000);
+  assert.equal(recordSettlement({ id: 42, status: "succeeded", amount: "185.00" }).recorded, false);
+  assert.throws(
+    () => settlementCommand(paymentForSettlement(update, { amount: "lots", currency: "ZAR" })),
+    /amount_cents is required/,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-stored-amount-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const unnamed = recordSettlement(paymentForSettlement({ id: 42, status: "succeeded" }, stored));
+    assert.equal(unnamed.ok, true);
+    assert.equal(unnamed.recorded, false);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const seededText = readFileSync(ledger, "utf8");
+    const word = recordSettlement(paymentForSettlement(update, { amount: "lots", currency: "ZAR" }));
+    assert.equal(word.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), seededText);
+    const paid = recordSettlement(paymentForSettlement(update, stored));
+    assert.equal(paid.ok, true, paid.error);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /"amount_cents": 18500/);
+    assert.match(recorded, /pay-42/);
+    const again = recordSettlement(paymentForSettlement(update, stored));
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
   } finally {

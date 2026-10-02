@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSkinOutcome } from "./supplyChain";
+import { acceptOrderFulfillments, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, recordSettlement, recordSkinOutcome } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -656,7 +656,13 @@ const paymentRouter = router({
     }),
   
   verifyPaystack: protectedProcedure
-    .input(z.object({ reference: z.string() }))
+    .input(z.object({
+      reference: z.string(),
+      settlementId: z.string().optional(),
+      fulfillmentId: z.string().optional(),
+      amount: z.number().optional(),
+      currency: z.string().optional(),
+    }))
     .mutation(async ({ input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
       const paystack = createPaystackService();
@@ -664,6 +670,17 @@ const paymentRouter = router({
       const transaction = await paystack.verifyTransaction(input.reference);
       
       const payment = await db.getPaymentByProcessorId(input.reference);
+      if (transaction.status === 'success' && input.fulfillmentId) {
+        const recorded = recordSettlement({
+          settlementId: input.settlementId,
+          fulfillmentId: input.fulfillmentId,
+          amount: input.amount ?? Number(payment?.amount),
+          currency: input.currency || payment?.currency,
+        });
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
+      }
       if (payment) {
         await db.updatePayment(payment.id, {
           status: transaction.status === 'success' ? 'succeeded' : 'failed',
@@ -677,9 +694,26 @@ const paymentRouter = router({
     .input(z.object({
       id: z.number(),
       status: z.enum(['pending', 'succeeded', 'failed', 'refunded', 'partially_refunded']).optional(),
+      settlementId: z.string().optional(),
+      fulfillmentId: z.string().optional(),
+      amount: z.number().optional(),
+      currency: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const { id, ...data } = input;
+      if (input.status === "succeeded" && input.fulfillmentId) {
+        const recorded = recordSettlement(input);
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
+      }
+      const {
+        id,
+        settlementId: _settlementId,
+        fulfillmentId: _fulfillmentId,
+        amount: _amount,
+        currency: _currency,
+        ...data
+      } = input;
       await db.updatePayment(id, data);
       return { success: true };
     }),

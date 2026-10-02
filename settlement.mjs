@@ -29,6 +29,11 @@ function named(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
+function namedChargeId(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return named(value);
+}
+
 function metadataObject(value) {
   if (typeof value === "string") {
     try {
@@ -263,7 +268,7 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
     named(metadata.fulfillment_id) ||
     named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const reference = named(data.reference) || (data.id == null ? fulfillmentId : String(data.id));
+  const reference = named(data.reference) || namedChargeId(data.id) || fulfillmentId;
   const settlementId =
     sale.settlementId ||
     named(metadata.settlement_id) ||

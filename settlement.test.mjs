@@ -544,3 +544,80 @@ test("a verified Paystack charge settles the fulfillment named in its metadata",
   assert.equal(settlementCommand(explicit).args.fulfillment_id, "order-explicit");
   assert.equal(settlementCommand(explicit).args.amount_cents, 18500);
 });
+
+test("a verified Paystack charge named by a blank reference records the charge id once", () => {
+  const preferred = verifiedPaystackSettlement({
+    status: "success",
+    amount: 18500,
+    currency: "NGN",
+    reference: "ref-1",
+    id: 99,
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(preferred.settlementId, "pay-ref-1");
+  const fallen = verifiedPaystackSettlement({
+    status: "success",
+    amount: 18500,
+    currency: "NGN",
+    reference: "  ",
+    id: 99,
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(fallen.settlementId, "pay-99");
+  assert.equal(fallen.fulfillmentId, "order-9:0:sku-cleanser");
+  const labeled = verifiedPaystackSettlement({
+    status: "success",
+    amount: 18500,
+    currency: "NGN",
+    reference: "  ",
+    id: "  ",
+    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+  });
+  assert.equal(labeled.settlementId, "pay-order-9:0:sku-cleanser");
+  assert.equal(
+    verifiedPaystackSettlement({ status: "success", amount: 18500, reference: "  ", id: 99 }),
+    null,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "portal-paystack-id-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "to-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const paid = recordSettlement(fallen);
+    assert.equal(paid.ok, true);
+    assert.equal(paid.recorded, true);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /pay-99/);
+    const again = recordSettlement(fallen);
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});

@@ -1,7 +1,7 @@
 // Map a succeeded portal payment onto the integrations settlement command.
 
 import { spawnSync } from "node:child_process";
-import { loadChainLocate } from "./chain_stage.mjs";
+import { loadChainLocate, namedSale } from "./chain_stage.mjs";
 
 function text(value, label) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -62,10 +62,9 @@ export function paymentIntentMetadata(input = {}) {
   const metadata = {};
   if (input.userId != null && String(input.userId).trim() !== "") metadata.userId = String(input.userId);
   if (input.orderId != null && String(input.orderId).trim() !== "") metadata.orderId = String(input.orderId);
-  const fulfillmentId = named(input.fulfillmentId ?? input.fulfillment_id);
-  if (fulfillmentId) metadata.fulfillment_id = fulfillmentId;
-  const settlementId = named(input.settlementId ?? input.settlement_id);
-  if (settlementId) metadata.settlement_id = settlementId;
+  const sale = namedSale(input);
+  if (sale.fulfillmentId) metadata.fulfillment_id = sale.fulfillmentId;
+  if (sale.settlementId) metadata.settlement_id = sale.settlementId;
   return metadata;
 }
 
@@ -247,10 +246,9 @@ export function paystackInitializeMetadata(input = {}) {
   const metadata = {};
   if (input.userId != null) metadata.userId = input.userId;
   if (input.orderId != null) metadata.orderId = input.orderId;
-  const fulfillmentId = named(input.fulfillmentId ?? input.fulfillment_id);
-  if (fulfillmentId) metadata.fulfillment_id = fulfillmentId;
-  const settlementId = named(input.settlementId ?? input.settlement_id);
-  if (settlementId) metadata.settlement_id = settlementId;
+  const sale = namedSale(input);
+  if (sale.fulfillmentId) metadata.fulfillment_id = sale.fulfillmentId;
+  if (sale.settlementId) metadata.settlement_id = sale.settlementId;
   return metadata;
 }
 
@@ -259,14 +257,15 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
   const data = transaction.data && typeof transaction.data === "object" ? transaction.data : transaction;
   if (data.status !== "success") return null;
   const metadata = metadataObject(data.metadata);
+  const sale = namedSale(overrides);
   const fulfillmentId =
-    named(overrides.fulfillmentId ?? overrides.fulfillment_id) ||
+    sale.fulfillmentId ||
     named(metadata.fulfillment_id) ||
     named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
   const reference = named(data.reference) || (data.id == null ? fulfillmentId : String(data.id));
   const settlementId =
-    named(overrides.settlementId ?? overrides.settlement_id) ||
+    sale.settlementId ||
     named(metadata.settlement_id) ||
     named(metadata.settlementId) ||
     `pay-${reference}`;
@@ -281,13 +280,13 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
 
 export function settlementCommand(payment) {
   if (!payment || typeof payment !== "object" || Array.isArray(payment)) return null;
-  const fulfillmentId = payment.fulfillmentId ?? payment.fulfillment_id;
-  if (typeof fulfillmentId !== "string" || fulfillmentId.trim() === "") return null;
+  const sale = namedSale(payment);
+  if (!sale.fulfillmentId) return null;
   return {
     command: "settle",
     args: {
-      settlement_id: text(payment.settlementId ?? payment.settlement_id, "settlement_id"),
-      fulfillment_id: text(fulfillmentId, "fulfillment_id"),
+      settlement_id: text(sale.settlementId, "settlement_id"),
+      fulfillment_id: sale.fulfillmentId,
       amount_cents: amountCents(payment),
       currency: text(payment.currency || "USD", "currency"),
     },

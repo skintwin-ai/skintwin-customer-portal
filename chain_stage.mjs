@@ -117,11 +117,11 @@ export function acceptSaleReturn(returnId, fulfillmentId) {
 
 export function paymentReturnCommands(payment) {
   if (!payment || typeof payment !== "object" || payment.status !== "refunded") return [];
-  const fulfillmentId = payment.fulfillmentId ?? payment.fulfillment_id;
-  if (fulfillmentId == null || fulfillmentId === "") return [];
+  const sale = namedSale(payment);
+  if (!sale.fulfillmentId) return [];
   const paymentId = payment.id ?? payment.paymentId ?? "payment";
-  const returnId = payment.returnId || payment.return_id || `return:${paymentId}:${fulfillmentId}`;
-  return saleReturnCommands(returnId, fulfillmentId);
+  const returnId = sale.returnId || `return:${paymentId}:${sale.fulfillmentId}`;
+  return saleReturnCommands(returnId, sale.fulfillmentId);
 }
 
 export function acceptPaymentReturn(payment) {
@@ -177,6 +177,22 @@ export function fulfill(args) {
     milligrams: positive(args.milligrams, "milligrams"),
     kind,
     practitioner_id: kind === "treatment" ? text(args.practitioner_id, "practitioner_id") : null,
+  };
+}
+
+export function namedLedgerId(record, camel, snake) {
+  const first = record?.[camel];
+  if (typeof first === "string" && first.trim() !== "") return first.trim();
+  const second = record?.[snake];
+  if (typeof second === "string" && second.trim() !== "") return second.trim();
+  return "";
+}
+
+export function namedSale(record) {
+  return {
+    fulfillmentId: namedLedgerId(record, "fulfillmentId", "fulfillment_id"),
+    returnId: namedLedgerId(record, "returnId", "return_id"),
+    settlementId: namedLedgerId(record, "settlementId", "settlement_id"),
   };
 }
 

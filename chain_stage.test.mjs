@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acceptBookingDelivery, acceptChargeReturn, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
+import { acceptBookingDelivery, acceptChargeReturn, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptTreatmentProducts, bookingDeliveryCommands, catalogProduct, chargeReturnCommands, formulaIdFromShopify, fulfillmentCommands, handleStage, loadChainLocate, namedSale, paymentReturnCommands, purchaseReceiptCommands, saleReturnCommands, shopifyCatalogCommands, storedOrderLine, supplierQualificationCommands, treatmentProductCommands } from "./chain_stage.mjs";
 
 test("catalog command accepts a finished sku", () => {
   const result = handleStage({
@@ -1097,6 +1097,81 @@ test("a refunded sale puts the product back once", () => {
     const recorded = readFileSync(ledger, "utf8");
     assert.match(recorded, /return-1/);
     const again = acceptSaleReturn("return-1", "order-9:0:sku-cleanser");
+    assert.equal(again.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), recorded);
+  } finally {
+    if (previousLedger === undefined) delete process.env.SKINTWIN_CHAIN_LEDGER;
+    else process.env.SKINTWIN_CHAIN_LEDGER = previousLedger;
+    if (previousHub === undefined) delete process.env.SKINTWIN_HUB_ROOT;
+    else process.env.SKINTWIN_HUB_ROOT = previousHub;
+  }
+});
+
+test("a refund named by fulfillment_id returns that sale once", () => {
+  const preferred = namedSale({
+    fulfillmentId: "order-camel",
+    fulfillment_id: "order-snake",
+    return_id: "return-snake",
+  });
+  assert.equal(preferred.fulfillmentId, "order-camel");
+  assert.equal(preferred.returnId, "return-snake");
+  const named = namedSale({ fulfillmentId: " ", fulfillment_id: " order-9:0:sku-cleanser ", return_id: "return-snake" });
+  assert.equal(named.fulfillmentId, "order-9:0:sku-cleanser");
+  assert.equal(named.returnId, "return-snake");
+  assert.equal(namedSale({ status: "refunded" }).fulfillmentId, "");
+  assert.deepEqual(paymentReturnCommands({ status: "refunded", id: 4, fulfillment_id: "order-9:0:sku-cleanser", return_id: "return-snake" }), [
+    {
+      command: "return_sale",
+      args: { return_id: "return-snake", fulfillment_id: "order-9:0:sku-cleanser" },
+    },
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), "portal-return-snake-"));
+  const ledger = join(dir, "supply-chain.jsonl");
+  const locate = loadChainLocate();
+  assert.ok(locate);
+  const hub = locate.hubRoot();
+  const previousLedger = process.env.SKINTWIN_CHAIN_LEDGER;
+  const previousHub = process.env.SKINTWIN_HUB_ROOT;
+  process.env.SKINTWIN_CHAIN_LEDGER = ledger;
+  process.env.SKINTWIN_HUB_ROOT = hub;
+  try {
+    const skipped = acceptPaymentReturn({ status: "refunded", id: 4 });
+    assert.equal(skipped.ok, true);
+    assert.equal(skipped.count, 0);
+    assert.equal(existsSync(ledger), false);
+    const seeded = spawnSync("python3", ["-m", "domain.ledger"], {
+      cwd: hub,
+      input: JSON.stringify({
+        commands: [
+          { command: "specify_ingredient", args: { ingredient_id: "glycerin", inci: "Glycerin", cas: "56-81-5" } },
+          { command: "qualify_supplier", args: { qualification_id: "qual-glycerin", supplier_name: "Inland Humectants", ingredient_id: "glycerin" } },
+          { command: "receive_lot", args: { lot_id: "lot-glycerin", ingredient_id: "glycerin", qualification_id: "qual-glycerin", milligrams: 5000 } },
+          { command: "define_formula", args: { formula_id: "cleanser", name: "Gentle cleanser", lines: [["glycerin", 5000]] } },
+          { command: "catalog_sku", args: { sku_id: "sku-cleanser", formula_id: "cleanser", name: "Gentle cleanser" } },
+          { command: "manufacture", args: { batch_id: "batch-cleanser", sku_id: "sku-cleanser", units: 1, allocations: [["glycerin", "lot-glycerin", 5000]] } },
+          { command: "transfer", args: { transfer_id: "xfer-cape-town", sku_id: "sku-cleanser", batch_id: "batch-cleanser", source: "plant", destination: "cape-town", milligrams: 5000 } },
+          { command: "fulfill", args: { fulfillment_id: "order-9:0:sku-cleanser", sku_id: "sku-cleanser", location: "cape-town", milligrams: 2000, kind: "retail" } },
+        ],
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(seeded.status, 0, seeded.stderr || seeded.stdout);
+    const returned = acceptPaymentReturn({
+      status: "refunded",
+      id: 4,
+      fulfillment_id: "order-9:0:sku-cleanser",
+      return_id: "return-snake",
+    });
+    assert.equal(returned.ok, true);
+    assert.equal(returned.count, 1);
+    const recorded = readFileSync(ledger, "utf8");
+    assert.match(recorded, /return-snake/);
+    const again = acceptPaymentReturn({
+      status: "refunded",
+      id: 4,
+      fulfillment_id: "order-9:0:sku-cleanser",
+      return_id: "return-snake",
+    });
     assert.equal(again.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), recorded);
   } finally {

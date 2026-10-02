@@ -15,6 +15,28 @@ test("a payment without a fulfillment is not a settlement", () => {
   assert.equal(skipped.recorded, false);
 });
 
+test("a settlement named by fulfillment_id records that sale", () => {
+  assert.equal(settlementCommand({ amount: 185, currency: "ZAR", fulfillment_id: " " }), null);
+  const command = settlementCommand({
+    settlement_id: "pay-snake",
+    fulfillmentId: " ",
+    fulfillment_id: " order-9:0:sku-cleanser ",
+    amount: "185.00",
+    currency: "zar",
+  });
+  assert.equal(command.args.settlement_id, "pay-snake");
+  assert.equal(command.args.fulfillment_id, "order-9:0:sku-cleanser");
+  assert.equal(command.args.amount_cents, 18500);
+  const metadata = paymentIntentMetadata({ fulfillment_id: "order-9:0:sku-cleanser", settlement_id: "pay-snake" });
+  assert.equal(metadata.fulfillment_id, "order-9:0:sku-cleanser");
+  assert.equal(metadata.settlement_id, "pay-snake");
+  const preferred = paymentIntentMetadata({
+    fulfillmentId: "order-camel",
+    fulfillment_id: "order-snake",
+  });
+  assert.equal(preferred.fulfillment_id, "order-camel");
+});
+
 test("a succeeded payment becomes a settlement in cents", () => {
   const command = settlementCommand({
     settlementId: "pay-portal",

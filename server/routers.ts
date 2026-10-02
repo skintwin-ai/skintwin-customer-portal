@@ -5,7 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
+import { acceptBookingDelivery, acceptOrderFulfillments, acceptPaymentReturn, acceptPurchaseReceipt, acceptSaleReturn, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentIntentMetadata, paystackInitializeMetadata, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -545,19 +545,28 @@ const orderRouter = router({
       id: z.number(),
       status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded']),
       fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
       returnId: z.string().optional(),
+      return_id: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      if ((input.status === "refunded" || input.status === "cancelled") && input.fulfillmentId) {
+      const sale = namedSale(input);
+      if ((input.status === "refunded" || input.status === "cancelled") && sale.fulfillmentId) {
         const returned = acceptSaleReturn(
-          input.returnId || `return:${input.id}:${input.fulfillmentId}`,
-          input.fulfillmentId,
+          sale.returnId || `return:${input.id}:${sale.fulfillmentId}`,
+          sale.fulfillmentId,
         );
         if (!returned.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
         }
       }
-      const { fulfillmentId: _fulfillmentId, returnId: _returnId, ...status } = input;
+      const {
+        fulfillmentId: _fulfillmentId,
+        fulfillment_id: _fulfillmentSnake,
+        returnId: _returnId,
+        return_id: _returnSnake,
+        ...status
+      } = input;
       await db.updateOrder(status.id, { status: status.status });
       return { success: true };
     }),
@@ -601,10 +610,13 @@ const paymentRouter = router({
       amount: z.number(),
       currency: z.string().default('USD'),
       fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
       settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaymentIntent } = await import('./integrations/stripe');
+      const sale = namedSale(input);
       
       const paymentIntent = await createPaymentIntent({
         amount: Math.round(input.amount * 100),
@@ -612,8 +624,8 @@ const paymentRouter = router({
         metadata: paymentIntentMetadata({
           userId: ctx.user.id.toString(),
           orderId: input.orderId?.toString() || '',
-          fulfillmentId: input.fulfillmentId,
-          settlementId: input.settlementId,
+          fulfillmentId: sale.fulfillmentId,
+          settlementId: sale.settlementId,
         }),
       });
       
@@ -644,11 +656,14 @@ const paymentRouter = router({
       email: z.string().email(),
       callbackUrl: z.string(),
       fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
       settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
       const paystack = createPaystackService();
+      const sale = namedSale(input);
       
       const result = await paystack.initializeTransaction({
         email: input.email,
@@ -658,8 +673,8 @@ const paymentRouter = router({
         metadata: paystackInitializeMetadata({
           userId: ctx.user.id,
           orderId: input.orderId,
-          fulfillmentId: input.fulfillmentId,
-          settlementId: input.settlementId,
+          fulfillmentId: sale.fulfillmentId,
+          settlementId: sale.settlementId,
         }),
       });
       
@@ -685,21 +700,24 @@ const paymentRouter = router({
     .input(z.object({
       reference: z.string(),
       settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
       fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
       amount: z.number().optional(),
       currency: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
       const paystack = createPaystackService();
+      const sale = namedSale(input);
       
       const transaction = await paystack.verifyTransaction(input.reference);
       
       const payment = await db.getPaymentByProcessorId(input.reference);
       const settlement = verifiedPaystackSettlement(transaction, {
-        fulfillmentId: input.fulfillmentId,
-        settlementId: input.settlementId,
-        amount: input.amount != null ? input.amount : input.fulfillmentId ? Number(payment?.amount) : undefined,
+        fulfillmentId: sale.fulfillmentId,
+        settlementId: sale.settlementId,
+        amount: input.amount != null ? input.amount : sale.fulfillmentId ? Number(payment?.amount) : undefined,
         currency: input.currency || payment?.currency,
       });
       if (settlement) {
@@ -722,13 +740,17 @@ const paymentRouter = router({
       id: z.number(),
       status: z.enum(['pending', 'succeeded', 'failed', 'refunded', 'partially_refunded']).optional(),
       settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
       fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
       returnId: z.string().optional(),
+      return_id: z.string().optional(),
       amount: z.number().optional(),
       currency: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      if (input.status === "succeeded" && input.fulfillmentId) {
+      const sale = namedSale(input);
+      if (input.status === "succeeded" && sale.fulfillmentId) {
         const recorded = recordSettlement(input);
         if (!recorded.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
@@ -743,8 +765,11 @@ const paymentRouter = router({
       const {
         id,
         settlementId: _settlementId,
+        settlement_id: _settlementSnake,
         fulfillmentId: _fulfillmentId,
+        fulfillment_id: _fulfillmentSnake,
         returnId: _returnId,
+        return_id: _returnSnake,
         amount: _amount,
         currency: _currency,
         ...data

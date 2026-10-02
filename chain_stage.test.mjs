@@ -1873,6 +1873,27 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_snake", metadata: { settlement_id: "pay-snake" } }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_inv", invoice: "in_1" }), []);
   assert.deepEqual(chargeReturnCommands({ refunded: false, id: "ch_inv", invoice: { id: "in_1" } }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_pi_inv",
+    payment_intent: { id: "pi_1", invoice: "in_1" },
+  }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: false,
+    id: "ch_pi_inv",
+    payment_intent: { id: "pi_1", invoice: { id: "in_1" } },
+  }), []);
+  assert.deepEqual(chargeReturnCommands({
+    refunded: true,
+    id: "ch_1",
+    metadata,
+    payment_intent: { id: "pi_1", invoice: "in_lines" },
+  }), [
+    {
+      command: "return_sale",
+      args: { return_id: `return:ch_1:${fulfillmentId}`, fulfillment_id: fulfillmentId },
+    },
+  ]);
   assert.deepEqual(chargeReturnCommands({ refunded: true, id: "ch_1", metadata, invoice: "in_1" }), [
     {
       command: "return_sale",
@@ -2045,11 +2066,26 @@ test("a fully refunded charge returns the sale named in its metadata", () => {
     });
     assert.equal(linesAgain.ok, false);
     assert.equal(readFileSync(ledger, "utf8"), linesText);
+    const chargeInvoiceWins = acceptChargeReturn({
+      refunded: true,
+      id: "ch_both",
+      invoice: "in_1",
+      payment_intent: { id: "pi_other", invoice: "in_10" },
+    });
+    assert.equal(chargeInvoiceWins.ok, false);
+    assert.equal(readFileSync(ledger, "utf8"), linesText);
+    const absentIntentInvoice = acceptChargeReturn({
+      refunded: true,
+      id: "ch_intent_missing",
+      payment_intent: { id: "pi_1", invoice: "in_missing" },
+    });
+    assert.equal(absentIntentInvoice.ok, true);
+    assert.equal(absentIntentInvoice.count, 0);
+    assert.equal(readFileSync(ledger, "utf8"), linesText);
     const fromTen = acceptChargeReturn({
       refunded: true,
       id: "ch_in10",
-      invoice: "in_10",
-      payment_intent: "pi_other",
+      payment_intent: { id: "pi_other", invoice: { id: "in_10" } },
     });
     assert.equal(fromTen.ok, true, fromTen.error);
     assert.equal(fromTen.count, 1);
@@ -2626,6 +2662,22 @@ test("a refunded charge returns the sale stored on its order once", () => {
   assert.deepEqual(chargeStoredSaleReturns({ refunded: true, id: "ch_1", invoice: "in_1" }, "order-9", lines), []);
   assert.deepEqual(
     chargeStoredSaleReturns({ refunded: true, id: "ch_1", invoice: { id: "in_1" } }, "order-9", lines),
+    [],
+  );
+  assert.deepEqual(
+    chargeStoredSaleReturns(
+      { refunded: true, id: "ch_1", payment_intent: { id: "pi_1", invoice: "in_1" } },
+      "order-9",
+      lines,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    chargeStoredSaleReturns(
+      { refunded: true, id: "ch_1", payment_intent: { id: "pi_1", invoice: { id: "in_1" } } },
+      "order-9",
+      lines,
+    ),
     [],
   );
   assert.deepEqual(chargeStoredSaleReturns(charge, "order-9", [{ type: "service", name: "Facial" }]), []);

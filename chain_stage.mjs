@@ -259,11 +259,20 @@ function chargeSaleReturns(charge, fulfillmentIds) {
   });
 }
 
-function chargeInvoiceId(charge) {
-  const invoice = charge?.invoice;
+function namedInvoiceId(invoice) {
   if (typeof invoice === "string") return invoice.trim();
   if (!invoice || typeof invoice !== "object" || Array.isArray(invoice)) return "";
   return typeof invoice.id === "string" ? invoice.id.trim() : "";
+}
+
+function chargeInvoiceId(charge) {
+  const direct = namedInvoiceId(charge?.invoice);
+  if (direct) return direct;
+  const intent = charge?.payment_intent;
+  if (intent && typeof intent === "object" && !Array.isArray(intent)) {
+    return namedInvoiceId(intent.invoice);
+  }
+  return "";
 }
 
 export function chargeReturnCommands(charge) {

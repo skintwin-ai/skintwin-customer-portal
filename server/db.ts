@@ -464,6 +464,13 @@ export async function createPayment(payment: InsertPayment) {
   return result[0].insertId;
 }
 
+export async function getPayment(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(payments).where(eq(payments.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
 export async function getPaymentByProcessorId(processorPaymentId: string) {
   const db = await getDb();
   if (!db) return undefined;

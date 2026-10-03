@@ -5,6 +5,7 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
+import { KILOGRAM_TEXT, MILLIGRAM_TEXT } from "./ledger-input.mjs";
 import { acceptBookingCancellation, acceptBookingDelivery, acceptCancelledOrderReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordOrderSaleSettlements, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
@@ -523,7 +524,7 @@ const orderRouter = router({
         total: z.string(),
         type: z.enum(['product', 'treatment', 'service']).default('product'),
         location: z.string().optional(),
-        milligrams: z.number().int().positive().optional(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
         practitionerId: z.string().optional(),
         practitioner_id: z.string().optional(),
       })),
@@ -949,7 +950,7 @@ const bookingRouter = router({
         batch_id: z.string().optional(),
         source: z.string(),
         destination: z.string(),
-        milligrams: z.number().int().positive(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]),
       }).optional(),
     }))
     .mutation(async ({ input }) => {
@@ -1130,15 +1131,15 @@ const purchaseOrderRouter = router({
         qualification_id: z.string().optional(),
         lotId: z.string().optional(),
         lot_id: z.string().optional(),
-        milligrams: z.number().int().positive().optional(),
-        quantityKg: z.number().positive().optional(),
-        quantity_kg: z.number().positive().optional(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
+        quantityKg: z.union([z.number().positive(), z.string().regex(KILOGRAM_TEXT)]).optional(),
+        quantity_kg: z.union([z.number().positive(), z.string().regex(KILOGRAM_TEXT)]).optional(),
         componentId: z.string().optional(),
         component_id: z.string().optional(),
         name: z.string().optional(),
         supplierName: z.string().optional(),
         supplier_name: z.string().optional(),
-        pieces: z.number().int().positive().optional(),
+        pieces: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
       })).optional(),
     }))
     .mutation(async ({ input }) => {

@@ -5,7 +5,8 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import * as db from "./db";
 import { TRPCError } from "@trpc/server";
-import { acceptOrderFulfillments, acceptSupplyChainCommand, catalogProduct, recordSkinOutcome } from "./supplyChain";
+import { KILOGRAM_TEXT, MILLIGRAM_TEXT } from "./ledger-input.mjs";
+import { acceptBookingCancellation, acceptBookingDelivery, acceptCancelledOrderReturns, acceptOrderFulfillments, acceptOrderSaleReturns, acceptPaymentReturn, acceptPurchaseReceipt, acceptShopifyCatalog, acceptSupplierQualification, acceptSupplyChainCommand, acceptTreatmentProducts, catalogProduct, namedSale, paymentForSettlement, paymentIntentMetadata, paystackInitializeMetadata, recordOrderSaleSettlements, recordSettlement, recordSkinOutcome, storedOrderLine, verifiedPaystackSettlement } from "./supplyChain";
 
 // Admin-only procedure
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -343,10 +344,16 @@ const treatmentRouter = router({
       notes: z.string().optional(),
       price: z.string(),
       duration: z.number().optional(),
+      reference: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
+      const { reference, ...treatment } = input;
+      const drawn = acceptTreatmentProducts(reference, treatment.productsUsed, String(ctx.therapist.id));
+      if (!drawn.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+      }
       const id = await db.createTreatment({
-        ...input,
+        ...treatment,
         therapistId: ctx.therapist.id,
       });
       return { id };
@@ -360,9 +367,16 @@ const treatmentRouter = router({
       productsUsed: z.any().optional(),
       notes: z.string().optional(),
       price: z.string().optional(),
+      reference: z.string().optional(),
     }))
-    .mutation(async ({ input }) => {
-      const { id, ...data } = input;
+    .mutation(async ({ ctx, input }) => {
+      const { id, reference, ...data } = input;
+      if (data.productsUsed !== undefined) {
+        const drawn = acceptTreatmentProducts(reference, data.productsUsed, String(ctx.therapist.id));
+        if (!drawn.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: drawn.error });
+        }
+      }
       await db.updateTreatment(id, data);
       return { success: true };
     }),
@@ -384,7 +398,10 @@ const productRouter = router({
       name: z.string(),
       description: z.string().optional(),
       sku: z.string().optional(),
+      sku_id: z.string().optional(),
+      skuId: z.string().optional(),
       formulaId: z.string().optional(),
+      formula_id: z.string().optional(),
       price: z.string(),
       costPrice: z.string().optional(),
       category: z.string().optional(),
@@ -392,17 +409,21 @@ const productRouter = router({
       inventory: z.number().default(0),
     }))
     .mutation(async ({ input }) => {
-      if (input.formulaId) {
+      const formulaId = input.formulaId?.trim() || input.formula_id?.trim();
+      const postedSku = [input.sku, input.sku_id, input.skuId].find(
+        (value) => typeof value === "string" && value.trim() !== "",
+      )?.trim();
+      if (formulaId) {
         const accepted = catalogProduct({
-          sku: input.sku,
-          name: input.name,
-          formulaId: input.formulaId,
+          ...input,
+          formulaId,
         });
         if (!accepted.ok) {
           throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
         }
       }
-      const { formulaId: _formulaId, ...product } = input;
+      const { formulaId: _formulaId, formula_id: _formulaSnake, sku_id: _skuSnake, skuId: _skuCamel, ...product } = input;
+      if (formulaId) product.sku = postedSku || input.name;
       const id = await db.createProduct(product);
       return { id };
     }),
@@ -423,6 +444,10 @@ const productRouter = router({
       );
       
       const products = await shopify.getAllProducts();
+      const recorded = acceptShopifyCatalog(products);
+      if (!recorded.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+      }
       let synced = 0;
       
       for (const product of products) {
@@ -492,13 +517,16 @@ const orderRouter = router({
         productId: z.number().optional(),
         name: z.string(),
         sku: z.string().optional(),
+        sku_id: z.string().optional(),
+        skuId: z.string().optional(),
         quantity: z.number(),
         unitPrice: z.string(),
         total: z.string(),
         type: z.enum(['product', 'treatment', 'service']).default('product'),
         location: z.string().optional(),
-        milligrams: z.number().int().positive().optional(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
         practitionerId: z.string().optional(),
+        practitioner_id: z.string().optional(),
       })),
     }))
     .mutation(async ({ input }) => {
@@ -509,13 +537,10 @@ const orderRouter = router({
       }
       const orderId = await db.createOrder(orderData);
       
-      const orderItems = items.map(item => {
-        const { location: _location, milligrams: _milligrams, practitionerId: _practitionerId, ...stored } = item;
-        return {
-          orderId,
-          ...stored,
-        };
-      });
+      const orderItems = items.map(item => ({
+        orderId,
+        ...storedOrderLine(item),
+      }));
       await db.createOrderItems(orderItems);
       
       return { id: orderId };
@@ -525,9 +550,32 @@ const orderRouter = router({
     .input(z.object({
       id: z.number(),
       status: z.enum(['pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded']),
+      fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
+      returnId: z.string().optional(),
+      return_id: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      await db.updateOrder(input.id, { status: input.status });
+      const sale = namedSale(input);
+      if (input.status === "refunded" || input.status === "cancelled") {
+        const returned = acceptCancelledOrderReturns(
+          sale,
+          (await db.getOrderById(input.id))?.orderNumber,
+          await db.getOrderItems(input.id),
+          input.id,
+        );
+        if (!returned.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
+        }
+      }
+      const {
+        fulfillmentId: _fulfillmentId,
+        fulfillment_id: _fulfillmentSnake,
+        returnId: _returnId,
+        return_id: _returnSnake,
+        ...status
+      } = input;
+      await db.updateOrder(status.id, { status: status.status });
       return { success: true };
     }),
   
@@ -569,17 +617,24 @@ const paymentRouter = router({
       customerId: z.number(),
       amount: z.number(),
       currency: z.string().default('USD'),
+      fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
+      settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaymentIntent } = await import('./integrations/stripe');
+      const sale = namedSale(input);
       
       const paymentIntent = await createPaymentIntent({
         amount: Math.round(input.amount * 100),
         currency: input.currency,
-        metadata: {
+        metadata: paymentIntentMetadata({
           userId: ctx.user.id.toString(),
           orderId: input.orderId?.toString() || '',
-        },
+          fulfillmentId: sale.fulfillmentId,
+          settlementId: sale.settlementId,
+        }),
       });
       
       const paymentId = await db.createPayment({
@@ -608,20 +663,27 @@ const paymentRouter = router({
       currency: z.string().default('NGN'),
       email: z.string().email(),
       callbackUrl: z.string(),
+      fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
+      settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
       const paystack = createPaystackService();
+      const sale = namedSale(input);
       
       const result = await paystack.initializeTransaction({
         email: input.email,
         amount: Math.round(input.amount * 100),
         currency: input.currency,
         callback_url: input.callbackUrl,
-        metadata: {
+        metadata: paystackInitializeMetadata({
           userId: ctx.user.id,
           orderId: input.orderId,
-        },
+          fulfillmentId: sale.fulfillmentId,
+          settlementId: sale.settlementId,
+        }),
       });
       
       const paymentId = await db.createPayment({
@@ -643,14 +705,45 @@ const paymentRouter = router({
     }),
   
   verifyPaystack: protectedProcedure
-    .input(z.object({ reference: z.string() }))
+    .input(z.object({
+      reference: z.string(),
+      settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
+      fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
+      amount: z.number().optional(),
+      currency: z.string().optional(),
+    }))
     .mutation(async ({ input }) => {
       const { createPaystackService } = await import('./integrations/paystack');
       const paystack = createPaystackService();
+      const sale = namedSale(input);
       
       const transaction = await paystack.verifyTransaction(input.reference);
       
       const payment = await db.getPaymentByProcessorId(input.reference);
+      const settlement = verifiedPaystackSettlement(transaction, {
+        fulfillmentId: sale.fulfillmentId,
+        settlementId: sale.settlementId,
+        amount: input.amount != null ? input.amount : sale.fulfillmentId ? Number(payment?.amount) : undefined,
+        currency: input.currency || payment?.currency,
+      });
+      if (settlement) {
+        const recorded = recordSettlement(settlement);
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
+      } else if (transaction.status === "success" && payment) {
+        const order = payment.orderId ? await db.getOrderById(payment.orderId) : undefined;
+        const recorded = recordOrderSaleSettlements(
+          order?.orderNumber,
+          order ? await db.getOrderItems(order.id) : [],
+          paymentForSettlement({ id: payment.id }, payment),
+        );
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
+      }
       if (payment) {
         await db.updatePayment(payment.id, {
           status: transaction.status === 'success' ? 'succeeded' : 'failed',
@@ -664,9 +757,67 @@ const paymentRouter = router({
     .input(z.object({
       id: z.number(),
       status: z.enum(['pending', 'succeeded', 'failed', 'refunded', 'partially_refunded']).optional(),
+      settlementId: z.string().optional(),
+      settlement_id: z.string().optional(),
+      fulfillmentId: z.string().optional(),
+      fulfillment_id: z.string().optional(),
+      returnId: z.string().optional(),
+      return_id: z.string().optional(),
+      amount: z.number().optional(),
+      currency: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const { id, ...data } = input;
+      const sale = namedSale(input);
+      if (input.status === "succeeded") {
+        const storedPayment = await db.getPayment(input.id);
+        const prepared = paymentForSettlement(input, storedPayment);
+        const recorded = sale.fulfillmentId
+          ? recordSettlement(prepared)
+          : recordOrderSaleSettlements(
+            storedPayment?.orderId ? (await db.getOrderById(storedPayment.orderId))?.orderNumber : undefined,
+            storedPayment?.orderId ? await db.getOrderItems(storedPayment.orderId) : [],
+            prepared,
+          );
+        if (!recorded.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: recorded.error });
+        }
+      }
+      if (input.status === "refunded") {
+        let returned;
+        if (sale.fulfillmentId || sale.settlementId) {
+          returned = acceptPaymentReturn(input);
+        } else {
+          const stored = await db.getPayment(input.id);
+          const order = stored?.orderId ? await db.getOrderById(stored.orderId) : undefined;
+          returned = acceptOrderSaleReturns(
+            order?.orderNumber,
+            order ? await db.getOrderItems(order.id) : [],
+            input.id,
+          );
+          if (returned.ok && returned.count === 0) {
+            returned = acceptPaymentReturn({
+              status: "refunded",
+              id: input.id,
+              processorPaymentId: stored?.processorPaymentId,
+            });
+          }
+        }
+        if (!returned.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
+        }
+      }
+      const {
+        id,
+        settlementId: _settlementId,
+        settlement_id: _settlementSnake,
+        fulfillmentId: _fulfillmentId,
+        fulfillment_id: _fulfillmentSnake,
+        returnId: _returnId,
+        return_id: _returnSnake,
+        amount: _amount,
+        currency: _currency,
+        ...data
+      } = input;
       await db.updatePayment(id, data);
       return { success: true };
     }),
@@ -789,8 +940,26 @@ const bookingRouter = router({
     }),
   
   complete: protectedProcedure
-    .input(z.object({ id: z.number() }))
+    .input(z.object({
+      id: z.number(),
+      delivery: z.object({
+        sku: z.string().optional(),
+        skuId: z.string().optional(),
+        sku_id: z.string().optional(),
+        batchId: z.string().optional(),
+        batch_id: z.string().optional(),
+        source: z.string(),
+        destination: z.string(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]),
+      }).optional(),
+    }))
     .mutation(async ({ input }) => {
+      if (input.delivery) {
+        const moved = acceptBookingDelivery(String(input.id), input.delivery);
+        if (!moved.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: moved.error });
+        }
+      }
       await db.updateBooking(input.id, { status: 'completed' });
       return { success: true };
     }),
@@ -798,6 +967,10 @@ const bookingRouter = router({
   cancel: protectedProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
+      const returned = acceptBookingCancellation(String(input.id));
+      if (!returned.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: returned.error });
+      }
       await db.updateBooking(input.id, { status: 'cancelled' });
       return { success: true };
     }),
@@ -882,9 +1055,24 @@ const supplierRouter = router({
       phone: z.string().optional(),
       address: z.string().optional(),
       erpnextSupplierId: z.string().optional(),
+      ingredientId: z.string().optional(),
+      ingredient_id: z.string().optional(),
+      qualificationId: z.string().optional(),
+      qualification_id: z.string().optional(),
     }))
     .mutation(async ({ input }) => {
-      const id = await db.createSupplier(input);
+      const accepted = acceptSupplierQualification(input);
+      if (!accepted.ok) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+      }
+      const {
+        ingredientId: _ingredientId,
+        ingredient_id: _ingredientSnake,
+        qualificationId: _qualificationId,
+        qualification_id: _qualificationSnake,
+        ...supplier
+      } = input;
+      const id = await db.createSupplier(supplier);
       return { id };
     }),
 });
@@ -934,9 +1122,33 @@ const purchaseOrderRouter = router({
   updateStatus: adminProcedure
     .input(z.object({
       id: z.number(),
+      poNumber: z.string().optional(),
       status: z.enum(['draft', 'submitted', 'approved', 'received', 'cancelled']),
+      receipts: z.array(z.object({
+        ingredientId: z.string().optional(),
+        ingredient_id: z.string().optional(),
+        qualificationId: z.string().optional(),
+        qualification_id: z.string().optional(),
+        lotId: z.string().optional(),
+        lot_id: z.string().optional(),
+        milligrams: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
+        quantityKg: z.union([z.number().positive(), z.string().regex(KILOGRAM_TEXT)]).optional(),
+        quantity_kg: z.union([z.number().positive(), z.string().regex(KILOGRAM_TEXT)]).optional(),
+        componentId: z.string().optional(),
+        component_id: z.string().optional(),
+        name: z.string().optional(),
+        supplierName: z.string().optional(),
+        supplier_name: z.string().optional(),
+        pieces: z.union([z.number().int().positive(), z.string().regex(MILLIGRAM_TEXT)]).optional(),
+      })).optional(),
     }))
     .mutation(async ({ input }) => {
+      if (input.status === "received" && input.receipts) {
+        const accepted = acceptPurchaseReceipt(input.poNumber || String(input.id), input.receipts);
+        if (!accepted.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: accepted.error });
+        }
+      }
       await db.updatePurchaseOrder(input.id, { status: input.status });
       return { success: true };
     }),

@@ -7,16 +7,24 @@ function text(value) {
   return typeof value === "string" ? value.trim() : value;
 }
 
+function namedId(record, camel, snake) {
+  const first = record?.[camel];
+  if (typeof first === "string" && first.trim() !== "") return first.trim();
+  const second = record?.[snake];
+  if (typeof second === "string" && second.trim() !== "") return second.trim();
+  return "";
+}
+
 export function outcomeCommand(analysis) {
   if (!analysis || typeof analysis !== "object" || Array.isArray(analysis)) return null;
-  const measured = ["score", "concern", "fulfillmentId", "fulfillment_id", "outcomeId", "outcome_id"]
-    .some((key) => analysis[key] !== undefined);
-  if (!measured) return null;
+  const fulfillmentId = namedId(analysis, "fulfillmentId", "fulfillment_id");
+  if (!fulfillmentId) return null;
+  const outcomeId = namedId(analysis, "outcomeId", "outcome_id") || `outcome:${fulfillmentId}`;
   return {
     command: "record_outcome",
     args: {
-      outcome_id: text(analysis.outcomeId ?? analysis.outcome_id),
-      fulfillment_id: text(analysis.fulfillmentId ?? analysis.fulfillment_id),
+      outcome_id: outcomeId,
+      fulfillment_id: fulfillmentId,
       concern: text(analysis.concern),
       score: analysis.score,
     },

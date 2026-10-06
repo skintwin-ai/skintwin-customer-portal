@@ -1,0 +1,38 @@
+# VCS / IDE
+.git
+.github
+.vscode
+.idea
+
+# Dependencies & caches
+node_modules
+.pnpm-store
+**/.cache
+**/*.tsbuildinfo
+
+# Build outputs (rebuilt in image)
+dist
+build
+coverage
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Tests & docs (not needed at runtime)
+**/*.test.ts
+**/*.test.mjs
+**/*.spec.ts
+vitest.config.ts
+todo.md
+*.md
+!package.json
+
+# Misc
+tmp
+temp
+logs
+*.log
+.DS_Store
+.gitkeep

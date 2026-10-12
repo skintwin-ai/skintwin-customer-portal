@@ -629,12 +629,14 @@ const paymentRouter = router({
       const paymentIntent = await createPaymentIntent({
         amount: Math.round(input.amount * 100),
         currency: input.currency,
-        metadata: paymentIntentMetadata({
-          userId: ctx.user.id.toString(),
-          orderId: input.orderId?.toString() || '',
-          fulfillmentId: sale.fulfillmentId,
-          settlementId: sale.settlementId,
-        }),
+        metadata: {
+          ...paymentIntentMetadata({
+            userId: ctx.user.id.toString(),
+            orderId: input.orderId?.toString() || '',
+            fulfillmentId: sale.fulfillmentId,
+            settlementId: sale.settlementId,
+          }),
+        },
       });
       
       const paymentId = await db.createPayment({
@@ -1261,7 +1263,7 @@ export const appRouter = router({
     command: publicProcedure
       .input(z.object({
         command: z.string(),
-        args: z.record(z.any()).optional(),
+        args: z.record(z.string(), z.any()).optional(),
       }))
       .mutation(({ input }) => {
         const accepted = acceptSupplyChainCommand(input);

@@ -1,0 +1,275 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target deployment environment
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - staging
+      skip_tests:
+        description: Skip CI quality job (emergency only)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "10.4.1"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  quality:
+    name: Pre-deploy quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_tests) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run check
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+        env:
+          NODE_ENV: production
+
+      - name: Upload production dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-dist-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    name: Build & push container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [quality]
+    if: ${{ always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped') }}
+    outputs:
+      image_tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=staging,enable=${{ github.event_name == 'workflow_dispatch' && inputs.environment == 'staging' }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  # Optional remote deploy. Configure repository secrets:
+  #   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY
+  # Optional: DEPLOY_PATH (default /opt/skintwin-customer-portal), DEPLOY_HEALTHCHECK_URL
+  # Host should keep runtime .env next to the compose/app path (DATABASE_URL, JWT_SECRET, etc.)
+  # Enable with repository variable ENABLE_REMOTE_DEPLOY=true
+  remote:
+    name: Deploy image to host
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [docker]
+    if: ${{ needs.docker.result == 'success' && vars.ENABLE_REMOTE_DEPLOY == 'true' }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
+
+    steps:
+      - name: Verify deploy secrets
+        id: gate
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required secret: ${name}"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Deploy secrets present"
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}"
+          echo "ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Deploying ${IMAGE}"
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          CONTAINER_NAME: skintwin-customer-portal
+          APP_PORT: "3000"
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: IMAGE_REF,CONTAINER_NAME,APP_PORT,DEPLOY_PATH
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${DEPLOY_PATH:-/opt/skintwin-customer-portal}"
+            mkdir -p "${DEPLOY_PATH}"
+            cd "${DEPLOY_PATH}"
+
+            if [ ! -f .env ]; then
+              echo "ERROR: ${DEPLOY_PATH}/.env is required for runtime secrets" >&2
+              exit 1
+            fi
+
+            set -a
+            # shellcheck disable=SC1091
+            . ./.env
+            set +a
+
+            if [ -n "${GHCR_PULL_TOKEN:-}" ]; then
+              echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GHCR_PULL_USER:-github}" --password-stdin
+            fi
+
+            docker pull "${IMAGE_REF}"
+
+            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+
+            docker run -d \
+              --name "${CONTAINER_NAME}" \
+              --restart unless-stopped \
+              --env-file .env \
+              -p "${APP_PORT}:3000" \
+              "${IMAGE_REF}"
+
+            docker ps --filter "name=${CONTAINER_NAME}"
+
+      - name: Smoke healthcheck
+        env:
+          DEPLOY_HEALTHCHECK_URL: ${{ secrets.DEPLOY_HEALTHCHECK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_HEALTHCHECK_URL}" ]; then
+            echo "No DEPLOY_HEALTHCHECK_URL secret set; skipping smoke check"
+            exit 0
+          fi
+          echo "Checking ${DEPLOY_HEALTHCHECK_URL}"
+          for _ in 1 2 3 4 5 6; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "${DEPLOY_HEALTHCHECK_URL}" || true)"
+            case "${code}" in
+              200|301|302)
+                echo "Healthcheck passed (${code})"
+                exit 0
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Healthcheck failed against ${DEPLOY_HEALTHCHECK_URL}"
+          exit 1
+
+  summary:
+    name: Deployment summary
+    runs-on: ubuntu-latest
+    needs: [quality, docker, remote]
+    if: always()
+    steps:
+      - name: Write job summary
+        run: |
+          {
+            echo "## SkinTwin Customer Portal deploy"
+            echo ""
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+            echo "| quality | ${{ needs.quality.result }} |"
+            echo "| docker  | ${{ needs.docker.result }} |"
+            echo "| remote  | ${{ needs.remote.result }} |"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Ref: \`${GITHUB_REF}\`"
+            echo "- Image package: \`ghcr.io/${{ github.repository }}\`"
+            echo ""
+            echo "Runtime requires env vars such as \`DATABASE_URL\`, \`JWT_SECRET\`, OAuth/WorkOS, and payment provider keys (provided via host \`.env\`, not the image)."
+            echo ""
+            echo "Remote SSH deploy runs only when repository variable \`ENABLE_REMOTE_DEPLOY=true\` and deploy secrets are configured."
+          } >> "$GITHUB_STEP_SUMMARY"

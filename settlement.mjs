@@ -38,8 +38,10 @@ function namedCurrency(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-function codeCurrency(value, fallback) {
-  const currency = (namedCurrency(value) || fallback).toUpperCase();
+function codeCurrency(value) {
+  const named = namedCurrency(value);
+  if (!named) throw new Error("currency is required");
+  const currency = named.toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error("currency must be a 3-letter code");
   return currency;
 }
@@ -92,7 +94,7 @@ export function succeededPaymentIntentSettlement(intent) {
   const metadata = metadataObject(intent.metadata);
   const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const currency = codeCurrency(intent.currency, "USD");
+  const currency = codeCurrency(intent.currency);
   const intentId = named(intent.id) || fulfillmentId;
   const settlementId =
     named(metadata.settlement_id) || named(metadata.settlementId) || `pay-${intentId}`;
@@ -127,7 +129,7 @@ export function completedCheckoutSettlement(session) {
   const metadata = metadataObject(session.metadata);
   const fulfillmentId = named(metadata.fulfillment_id) || named(metadata.fulfillmentId);
   if (!fulfillmentId) return null;
-  const currency = codeCurrency(session.currency, "USD");
+  const currency = codeCurrency(session.currency);
   const sessionId = named(session.id) || fulfillmentId;
   const intentId = namedPaymentIntentId(session);
   const settlementId =
@@ -151,7 +153,7 @@ export function recordCheckoutSettlement(session) {
 }
 
 function invoiceCurrency(invoice) {
-  return codeCurrency(invoice.currency, "USD");
+  return codeCurrency(invoice.currency);
 }
 
 function invoiceLines(invoice) {
@@ -297,13 +299,14 @@ export function verifiedPaystackSettlement(transaction, overrides = {}) {
   const currency =
     namedCurrency(overrides.currency) ||
     namedCurrency(data.currency) ||
-    namedCurrency(metadata.currency) ||
-    "NGN";
+    namedCurrency(metadata.currency);
   if (overrides.amount != null) {
+    if (!currency) throw new Error("currency is required");
     return { settlementId, fulfillmentId, amount: overrides.amount, currency };
   }
   const cents = minorUnits(data.amount);
   if (cents == null) return null;
+  if (!currency) throw new Error("currency is required");
   return { settlementId, fulfillmentId, amountCents: cents, currency };
 }
 
@@ -343,7 +346,7 @@ export function orderSaleSettlements(orderNumber, items, payment) {
   if (!orderId || !Array.isArray(items) || !payment || typeof payment !== "object" || Array.isArray(payment)) {
     return [];
   }
-  const currency = namedCurrency(payment.currency) || "USD";
+  const currency = namedCurrency(payment.currency);
   const paymentKey = payment.id == null || String(payment.id).trim() === "" ? orderId : String(payment.id).trim();
   const explicit = namedSale(payment).settlementId;
   const sales = [];
@@ -363,6 +366,8 @@ export function orderSaleSettlements(orderNumber, items, payment) {
       index,
     });
   });
+  if (sales.length === 0) return [];
+  if (!currency) throw new Error("currency is required");
   return sales.map((sale) => ({
     id: payment.id,
     settlementId: sales.length === 1 && explicit ? explicit : `pay-${paymentKey}:${sale.index}:${sale.fulfillmentId}`,
@@ -382,7 +387,7 @@ export function settlementCommand(payment) {
       settlement_id: text(sale.settlementId, "settlement_id"),
       fulfillment_id: sale.fulfillmentId,
       amount_cents: amountCents(payment),
-      currency: text(namedCurrency(payment.currency) || "USD", "currency"),
+      currency: text(namedCurrency(payment.currency), "currency"),
     },
   };
 }

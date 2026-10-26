@@ -929,26 +929,31 @@ test("a named sale with a blank currency records the next currency once", () => 
   });
   assert.equal(fallen.currency, "zar");
   assert.equal(fallen.fulfillmentId, "order-9:0:sku-cleanser");
-  const defaulted = verifiedPaystackSettlement({
-    status: "success",
-    amount: 18500,
-    currency: "  ",
-    reference: "ref-ngn",
-    metadata: { fulfillment_id: "order-9:0:sku-cleanser", currency: "  " },
-  });
-  assert.equal(defaulted.currency, "NGN");
+  assert.throws(
+    () =>
+      verifiedPaystackSettlement({
+        status: "success",
+        amount: 18500,
+        currency: "  ",
+        reference: "ref-ngn",
+        metadata: { fulfillment_id: "order-9:0:sku-cleanser", currency: "  " },
+      }),
+    /currency is required/,
+  );
   assert.equal(
     verifiedPaystackSettlement({ status: "success", amount: 18500, currency: "  ", reference: "ref-1" }),
     null,
   );
-  const intent = succeededPaymentIntentSettlement({
-    id: "pi_blank",
-    amount: 18500,
-    currency: "  ",
-    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
-  });
-  assert.equal(intent.currency, "USD");
-  assert.equal(intent.fulfillmentId, "order-9:0:sku-cleanser");
+  assert.throws(
+    () =>
+      succeededPaymentIntentSettlement({
+        id: "pi_blank",
+        amount: 18500,
+        currency: "  ",
+        metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+      }),
+    /currency is required/,
+  );
   assert.equal(
     succeededPaymentIntentSettlement({ id: "pi_plain", amount: 18500, currency: "  " }),
     null,
@@ -963,28 +968,35 @@ test("a named sale with a blank currency records the next currency once", () => 
       }),
     /currency must be a 3-letter code/,
   );
-  const checkout = completedCheckoutSettlement({
-    id: "cs_blank",
-    amount_total: 18500,
-    currency: "  ",
-    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
-  });
-  assert.equal(checkout.currency, "USD");
-  const invoice = paidInvoiceSettlement({
-    id: "in_blank",
-    amount_paid: 18500,
-    currency: "  ",
-    metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
-  });
-  assert.equal(invoice.currency, "USD");
-  assert.equal(
-    settlementCommand({
-      settlementId: "pay-blank",
-      fulfillmentId: "order-9:0:sku-cleanser",
-      amountCents: 18500,
-      currency: "  ",
-    }).args.currency,
-    "USD",
+  assert.throws(
+    () =>
+      completedCheckoutSettlement({
+        id: "cs_blank",
+        amount_total: 18500,
+        currency: "  ",
+        metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+      }),
+    /currency is required/,
+  );
+  assert.throws(
+    () =>
+      paidInvoiceSettlement({
+        id: "in_blank",
+        amount_paid: 18500,
+        currency: "  ",
+        metadata: { fulfillment_id: "order-9:0:sku-cleanser" },
+      }),
+    /currency is required/,
+  );
+  assert.throws(
+    () =>
+      settlementCommand({
+        settlementId: "pay-blank",
+        fulfillmentId: "order-9:0:sku-cleanser",
+        amountCents: 18500,
+        currency: "  ",
+      }),
+    /currency is required/,
   );
   assert.equal(
     settlementCommand({
@@ -1224,6 +1236,14 @@ test("a succeeded payment settles the sale stored on its order once", () => {
     { id: 1, type: "service", sku: "sku-facial", total: "50.00" },
   ];
   const payment = paymentForSettlement({ id: 42, status: "succeeded" }, { amount: "10.00", currency: "zar" });
+  assert.throws(
+    () => orderSaleSettlements("order-9", lines, paymentForSettlement({ id: 42, status: "succeeded" }, { amount: "10.00" })),
+    /currency is required/,
+  );
+  assert.deepEqual(
+    orderSaleSettlements("order-9", [{ type: "service", name: "Facial", total: "50.00" }], paymentForSettlement({ id: 42, status: "succeeded" }, { amount: "10.00" })),
+    [],
+  );
   assert.deepEqual(orderSaleSettlements("order-9", lines, payment), [
     {
       id: 42,
